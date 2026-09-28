@@ -33,15 +33,23 @@ jobs:
 
       - name: Compile FFmpeg & GDExtension
         run: |
-          # Dynamically locate the gde_gozen submodule directory
-          GDE_DIR=$(find . -type d -name "gde_gozen" | head -n 1)
+          GDE_DIR="./core/gde_gozen"
           
-          if [ -z "$GDE_DIR" ]; then
-            echo "Error: Could not find the gde_gozen submodule."
-            exit 1
+          # If the checkout step left the submodule empty, force a manual clone
+          if [ ! -f "$GDE_DIR/SConstruct" ]; then
+            echo "Submodule fetch failed. Manually cloning gde_gozen and godot-cpp..."
+            rm -rf "$GDE_DIR"
+            
+            # Pull the GDExtension directly from the GitHub mirror
+            git clone https://github.com/VoylinsGamedevJourney/gde_gozen "$GDE_DIR"
+            
+            # Initialize the internal godot-cpp submodule required for compilation
+            cd "$GDE_DIR"
+            git submodule update --init --recursive
+            cd ../..
           fi
           
-          echo "Found gde_gozen at: $GDE_DIR"
+          echo "Compiling in $GDE_DIR..."
           cd "$GDE_DIR"
           
           # Compile the GDExtension for Android architectures
