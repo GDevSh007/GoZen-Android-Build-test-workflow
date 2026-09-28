@@ -71,7 +71,11 @@ jobs:
       - name: Compile GDExtension (arm64)
         run: |
           cd ./core/gde_gozen
-          # Compile only for arm64 to match the FFmpeg build
+          
+          # Forcefully inject the missing FFmpeg include and library paths into the Android build environment
+          sed -i 's/env.SharedLibrary(/env.Append(CPPPATH=["ffmpeg"]); env.Append(LIBPATH=["ffmpeg\/libavformat", "ffmpeg\/libavcodec", "ffmpeg\/libavutil", "ffmpeg\/libswscale", "ffmpeg\/libswresample"]); env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample"]); env.SharedLibrary(/g' SConstruct
+          
+          # Compile the GDExtension for arm64
           scons platform=android target=template_release arch=arm64
 
       - name: Inject Android Export Preset
