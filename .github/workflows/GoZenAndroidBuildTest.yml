@@ -33,32 +33,41 @@ jobs:
       - name: Install SCons
         run: pip install scons
 
-      - name: Compile FFmpeg & GDExtension
+      - name: Cross-Compile FFmpeg for Android (arm64)
+        run: |
+          cd ./core/gde_gozen/ffmpeg
+          
+          # Map the exact NDK version installed in the previous step
+          NDK_PATH="/usr/local/lib/android/sdk/ndk/23.2.8568313"
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+          API=24 # Godot 4.3's minimum Android API requirement
+          
+          # Configure FFmpeg to build using the Android NDK compilers
+          ./configure \
+            --target-os=android \
+            --arch=aarch64 \
+            --enable-cross-compile \
+            --cc=$TOOLCHAIN/bin/aarch64-linux-android$API-clang \
+            --cxx=$TOOLCHAIN/bin/aarch64-linux-android$API-clang++ \
+            --strip=$TOOLCHAIN/bin/llvm-strip \
+            --sysroot=$TOOLCHAIN/sysroot \
+            --disable-programs \
+            --disable-doc \
+            --disable-static \
+            --enable-shared
+            
+          # Build the FFmpeg headers and .so libraries
+          make -j$(nproc)
+
+      - name: Compile GDExtension
         run: |
           GDE_DIR="./core/gde_gozen"
-          
-          # If the checkout step left the submodule empty, force a manual clone
-          if [ ! -f "$GDE_DIR/SConstruct" ]; then
-            echo "Submodule fetch failed. Manually cloning gde_gozen and godot-cpp..."
-            rm -rf "$GDE_DIR"
-            
-            # Pull the GDExtension directly from the GitHub mirror
-            git clone https://github.com/VoylinsGamedevJourney/gde_gozen "$GDE_DIR"
-            
-            # Initialize the internal godot-cpp submodule required for compilation
-            cd "$GDE_DIR"
-            git submodule update --init --recursive
-            cd ../..
-          fi
-          
           echo "Compiling in $GDE_DIR..."
           cd "$GDE_DIR"
           
-          # Compile the GDExtension for Android architectures
+          # Compile the GDExtension for arm64 only
           scons platform=android target=template_release arch=arm64
-          scons platform=android target=template_release arch=arm32
           
-          # Return to the GitHub workspace root for the Godot export step
           cd $GITHUB_WORKSPACE
 
       - name: Inject Android Export Preset
