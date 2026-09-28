@@ -23,6 +23,10 @@ jobs:
 
       - name: Setup Android SDK & NDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: |
+            platform-tools
+            ndk;23.2.8568313
 
       - name: Setup Python & SCons
         uses: actions/setup-python@v5
