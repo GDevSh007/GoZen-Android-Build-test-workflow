@@ -33,13 +33,12 @@ jobs:
       - name: Install SCons
         run: pip install scons
 
-      - name: Fetch and Cross-Compile FFmpeg for Android (arm64)
+      - name: Build External Codecs (OpenSSL, VPX, AOM)
         run: |
           GDE_DIR="./core/gde_gozen"
           
-          # Force manual clone if the checkout step left it empty
+          # 1. Fetch dependencies and force manual clone
           if [ ! -f "$GDE_DIR/SConstruct" ]; then
-            echo "Manually cloning gde_gozen and submodules..."
             rm -rf "$GDE_DIR"
             git clone https://github.com/VoylinsGamedevJourney/gde_gozen "$GDE_DIR"
             cd "$GDE_DIR"
@@ -47,11 +46,52 @@ jobs:
             cd ../..
           fi
           
-          # Cross-compile FFmpeg
-          cd "$GDE_DIR/ffmpeg"
+          # Set up a unified output directory for all external codecs
+          mkdir -p $GITHUB_WORKSPACE/codec_prefix
+          PREFIX=$GITHUB_WORKSPACE/codec_prefix
+          
+          # Setup NDK Toolchain Paths
+          export ANDROID_NDK_ROOT="/usr/local/lib/android/sdk/ndk/23.2.8568313"
+          export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          
+          # 2. Compile OpenSSL (for network streaming/TLS)
+          git clone --depth 1 -b openssl-3.0.12 https://github.com/openssl/openssl.git
+          cd openssl
+          ./Configure android-arm64 -D__ANDROID_API__=24 --prefix=$PREFIX
+          make -j$(nproc)
+          make install_sw
+          cd ..
+          
+          # 3. Compile libvpx (VP8/VP9)
+          cd $GDE_DIR/libvpx
+          ./configure --target=arm64-android-gcc --prefix=$PREFIX --disable-examples --disable-tools --disable-docs --enable-pic
+          make -j$(nproc)
+          make install
+          cd $GITHUB_WORKSPACE
+          
+          # 4. Compile libaom (AV1)
+          cd $GDE_DIR/libaom
+          mkdir -p build_android && cd build_android
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_INSTALL_PREFIX=$PREFIX \
+            -DENABLE_DOCS=0 -DENABLE_EXAMPLES=0 -DENABLE_TESTS=0 -DENABLE_TOOLS=0 \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=1
+          make -j$(nproc)
+          make install
+          cd $GITHUB_WORKSPACE
+
+      - name: Cross-Compile FFmpeg (arm64)
+        run: |
+          cd ./core/gde_gozen/ffmpeg
+          PREFIX=$GITHUB_WORKSPACE/codec_prefix
           NDK_PATH="/usr/local/lib/android/sdk/ndk/23.2.8568313"
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           API=24
+          
+          export PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig
           
           ./configure \
             --target-os=android \
@@ -61,32 +101,41 @@ jobs:
             --cxx=$TOOLCHAIN/bin/aarch64-linux-android$API-clang++ \
             --strip=$TOOLCHAIN/bin/llvm-strip \
             --sysroot=$TOOLCHAIN/sysroot \
+            --extra-cflags="-I$PREFIX/include" \
+            --extra-ldflags="-L$PREFIX/lib" \
             --disable-programs \
             --disable-doc \
             --disable-static \
-            --enable-shared
+            --enable-shared \
+            --enable-pic \
+            --enable-libvpx \
+            --enable-libaom \
+            --enable-openssl
             
           make -j$(nproc)
 
-      - name: Compile GDExtension (arm64)
+      - name: Compile GDExtension with Codecs (arm64)
         run: |
           cd ./core/gde_gozen
           
-          # Safely inject FFmpeg paths into SConstruct while preserving exact Python indentation
+          # Safely inject FFmpeg and our new custom codec library paths into SConstruct
           python3 << 'EOF'
+          import os
+          prefix = os.environ['GITHUB_WORKSPACE'] + "/codec_prefix/lib"
           with open("SConstruct", "r") as f:
               lines = f.readlines()
           with open("SConstruct", "w") as f:
               for line in lines:
+                  # We no longer strip the desktop libraries, we just ensure they load correctly
                   if "env.SharedLibrary" in line:
                       indent = line[:len(line)-len(line.lstrip())]
                       f.write(indent + 'env.Append(CPPPATH=["ffmpeg"])\n')
-                      f.write(indent + 'env.Append(LIBPATH=["ffmpeg/libavformat", "ffmpeg/libavcodec", "ffmpeg/libavutil", "ffmpeg/libswscale", "ffmpeg/libswresample"])\n')
-                      f.write(indent + 'env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample"])\n')
+                      f.write(indent + f'env.Append(LIBPATH=["ffmpeg/libavformat", "ffmpeg/libavcodec", "ffmpeg/libavutil", "ffmpeg/libswscale", "ffmpeg/libswresample", "{prefix}"])\n')
+                      # Including vpx, aom, ssl, crypto, and zlib for final linking
+                      f.write(indent + 'env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"])\n')
                   f.write(line)
           EOF
           
-          # Compile the GDExtension for arm64
           scons platform=android target=template_release arch=arm64
 
       - name: Inject Android Export Preset
