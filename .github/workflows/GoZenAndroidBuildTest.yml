@@ -33,16 +33,26 @@ jobs:
       - name: Install SCons
         run: pip install scons
 
-      - name: Cross-Compile FFmpeg for Android (arm64)
+      - name: Fetch and Cross-Compile FFmpeg for Android (arm64)
         run: |
-          cd ./core/gde_gozen/ffmpeg
+          GDE_DIR="./core/gde_gozen"
           
-          # Map the exact NDK version installed in the previous step
+          # Force manual clone if the checkout step left it empty
+          if [ ! -f "$GDE_DIR/SConstruct" ]; then
+            echo "Manually cloning gde_gozen and submodules..."
+            rm -rf "$GDE_DIR"
+            git clone https://github.com/VoylinsGamedevJourney/gde_gozen "$GDE_DIR"
+            cd "$GDE_DIR"
+            git submodule update --init --recursive
+            cd ../..
+          fi
+          
+          # Cross-compile FFmpeg
+          cd "$GDE_DIR/ffmpeg"
           NDK_PATH="/usr/local/lib/android/sdk/ndk/23.2.8568313"
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
-          API=24 # Godot 4.3's minimum Android API requirement
+          API=24
           
-          # Configure FFmpeg to build using the Android NDK compilers
           ./configure \
             --target-os=android \
             --arch=aarch64 \
@@ -56,19 +66,13 @@ jobs:
             --disable-static \
             --enable-shared
             
-          # Build the FFmpeg headers and .so libraries
           make -j$(nproc)
 
-      - name: Compile GDExtension
+      - name: Compile GDExtension (arm64)
         run: |
-          GDE_DIR="./core/gde_gozen"
-          echo "Compiling in $GDE_DIR..."
-          cd "$GDE_DIR"
-          
-          # Compile the GDExtension for arm64 only
+          cd ./core/gde_gozen
+          # Compile only for arm64 to match the FFmpeg build
           scons platform=android target=template_release arch=arm64
-          
-          cd $GITHUB_WORKSPACE
 
       - name: Inject Android Export Preset
         run: |
