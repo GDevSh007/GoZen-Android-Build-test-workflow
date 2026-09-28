@@ -72,8 +72,19 @@ jobs:
         run: |
           cd ./core/gde_gozen
           
-          # Forcefully inject the missing FFmpeg include and library paths into the Android build environment
-          sed -i 's/env.SharedLibrary(/env.Append(CPPPATH=["ffmpeg"]); env.Append(LIBPATH=["ffmpeg\/libavformat", "ffmpeg\/libavcodec", "ffmpeg\/libavutil", "ffmpeg\/libswscale", "ffmpeg\/libswresample"]); env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample"]); env.SharedLibrary(/g' SConstruct
+          # Safely inject FFmpeg paths into SConstruct while preserving exact Python indentation
+          python3 << 'EOF'
+          with open("SConstruct", "r") as f:
+              lines = f.readlines()
+          with open("SConstruct", "w") as f:
+              for line in lines:
+                  if "env.SharedLibrary" in line:
+                      indent = line[:len(line)-len(line.lstrip())]
+                      f.write(indent + 'env.Append(CPPPATH=["ffmpeg"])\n')
+                      f.write(indent + 'env.Append(LIBPATH=["ffmpeg/libavformat", "ffmpeg/libavcodec", "ffmpeg/libavutil", "ffmpeg/libswscale", "ffmpeg/libswresample"])\n')
+                      f.write(indent + 'env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample"])\n')
+                  f.write(line)
+          EOF
           
           # Compile the GDExtension for arm64
           scons platform=android target=template_release arch=arm64
