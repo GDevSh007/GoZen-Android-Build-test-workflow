@@ -118,7 +118,7 @@ jobs:
         run: |
           cd ./core/gde_gozen
           
-          # Safely inject FFmpeg and our new custom codec library paths into SConstruct
+          # Safely inject FFmpeg paths and strip the unsupported 'tls' library
           python3 << 'EOF'
           import os
           prefix = os.environ['GITHUB_WORKSPACE'] + "/codec_prefix/lib"
@@ -126,12 +126,17 @@ jobs:
               lines = f.readlines()
           with open("SConstruct", "w") as f:
               for line in lines:
-                  # We no longer strip the desktop libraries, we just ensure they load correctly
+                  # Strip out 'tls' since OpenSSL only provides 'ssl' and 'crypto'
+                  for bad_lib in ['"tls"', "'tls'"]:
+                      line = line.replace(bad_lib + ',', '')
+                      line = line.replace(', ' + bad_lib, '')
+                      line = line.replace(bad_lib, '""')
+                      
                   if "env.SharedLibrary" in line:
                       indent = line[:len(line)-len(line.lstrip())]
                       f.write(indent + 'env.Append(CPPPATH=["ffmpeg"])\n')
                       f.write(indent + f'env.Append(LIBPATH=["ffmpeg/libavformat", "ffmpeg/libavcodec", "ffmpeg/libavutil", "ffmpeg/libswscale", "ffmpeg/libswresample", "{prefix}"])\n')
-                      # Including vpx, aom, ssl, crypto, and zlib for final linking
+                      # Include vpx, aom, ssl, crypto, and zlib for final linking
                       f.write(indent + 'env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"])\n')
                   f.write(line)
           EOF
