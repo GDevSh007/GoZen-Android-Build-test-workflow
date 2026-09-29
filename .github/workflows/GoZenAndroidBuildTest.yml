@@ -160,7 +160,7 @@ jobs:
       - name: Setup Godot Headless
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: '4.3' # Adjust to match GoZen's required engine version
+          version: '4.3.0' # Adjust to match GoZen's required engine version
           use-dotnet: false
           include-templates: true
 
