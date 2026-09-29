@@ -150,6 +150,14 @@ jobs:
           use-dotnet: false
           include-templates: true
 
+      - name: Patch GDExtension Manifest for Android
+        run: |
+          # Navigate to the extension folder inside the Godot project
+          cd src/addons/gde_gozen
+          
+          # Inject the Android library path directly under the [libraries] header
+          sed -i '/\[libraries\]/a android.template_release.arm64 = "res://addons/gde_gozen/bin/libgozen.android.template_release.arm64.so"' gde_gozen.gdextension
+
       - name: Inject Android Export Preset
         run: |
           # Navigate into the actual Godot project folder
