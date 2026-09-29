@@ -150,20 +150,31 @@ jobs:
           use-dotnet: false
           include-templates: true
 
-      - name: Patch GDExtension Manifest for Android
+      - name: Patch GDExtension Manifest & Copy Binary
         run: |
-          # Navigate to the extension folder inside the Godot project
-          cd src/addons/gde_gozen
+          # Dynamically locate the main extension file (ignoring the submodule's isolated test environment)
+          EXT_FILE=$(find . -name "*.gdextension" | grep -v "core/gde_gozen" | head -n 1)
           
-          # Inject the Android library path directly under the [libraries] header
-          sed -i '/\[libraries\]/a android.template_release.arm64 = "res://addons/gde_gozen/bin/libgozen.android.template_release.arm64.so"' gde_gozen.gdextension
+          if [ -z "$EXT_FILE" ]; then
+            echo "Error: Could not find the main .gdextension file!"
+            exit 1
+          fi
+          
+          EXT_DIR=$(dirname "$EXT_FILE")
+          echo "Found extension at: $EXT_FILE"
+          
+          # SCons outputs the .so into the submodule's test_room. 
+          # We must copy it into the actual GoZen addons folder so Godot can bundle it.
+          mkdir -p "$EXT_DIR/bin"
+          cp ./core/gde_gozen/test_room/addons/gde_gozen/bin/libgozen.android.template_release.arm64.so "$EXT_DIR/bin/"
+          
+          # Inject the Android architecture paths into the configuration file
+          sed -i '/\[libraries\]/a android.debug.arm64 = "res://addons/gde_gozen/bin/libgozen.android.template_release.arm64.so"' "$EXT_FILE"
+          sed -i '/\[libraries\]/a android.release.arm64 = "res://addons/gde_gozen/bin/libgozen.android.template_release.arm64.so"' "$EXT_FILE"
 
       - name: Inject Android Export Preset
         run: |
-          # Navigate into the actual Godot project folder
-          cd src
-          
-          # Generate a robust preset with the required package name and options section
+          # Generate the preset at the workspace root
           cat <<EOF > export_presets.cfg
           [preset.0]
           name="Android"
@@ -185,9 +196,8 @@ jobs:
       - name: Export Android APK
         run: |
           mkdir -p build
-          cd src
-          # Export the APK and save it to the build folder in the workspace root
-          godot --headless --export-debug "Android" ../build/GoZen.apk
+          # Run the headless export from the workspace root
+          godot --headless --export-debug "Android" build/GoZen.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
