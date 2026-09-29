@@ -143,8 +143,19 @@ jobs:
           
           scons platform=android target=template_release arch=arm64
 
+      - name: Setup Godot Headless
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: '4.3.0' # Adjust to match GoZen's required engine version
+          use-dotnet: false
+          include-templates: true
+
       - name: Inject Android Export Preset
         run: |
+          # Navigate into the actual Godot project folder
+          cd src
+          
+          # Generate a robust preset with the required package name and options section
           cat <<EOF > export_presets.cfg
           [preset.0]
           name="Android"
@@ -155,19 +166,20 @@ jobs:
           keystore/debug="~/.android/debug.keystore"
           keystore/debug_user="androiddebugkey"
           keystore/debug_password="android"
+          
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          package/unique_name="com.voylins.gozen"
+          architecture/arm64=true
           EOF
-
-      - name: Setup Godot Headless
-        uses: chickensoft-games/setup-godot@v2
-        with:
-          version: '4.3.0' # Adjust to match GoZen's required engine version
-          use-dotnet: false
-          include-templates: true
 
       - name: Export Android APK
         run: |
           mkdir -p build
-          godot --headless --export-debug "Android" build/GoZen.apk
+          cd src
+          # Export the APK and save it to the build folder in the workspace root
+          godot --headless --export-debug "Android" ../build/GoZen.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
