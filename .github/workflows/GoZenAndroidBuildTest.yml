@@ -37,7 +37,6 @@ jobs:
         run: |
           GDE_DIR="./core/gde_gozen"
           
-          # 1. Fetch dependencies and force manual clone
           if [ ! -f "$GDE_DIR/SConstruct" ]; then
             rm -rf "$GDE_DIR"
             git clone https://github.com/VoylinsGamedevJourney/gde_gozen "$GDE_DIR"
@@ -46,15 +45,13 @@ jobs:
             cd ../..
           fi
           
-          # Set up a unified output directory for all external codecs
           mkdir -p $GITHUB_WORKSPACE/codec_prefix
           PREFIX=$GITHUB_WORKSPACE/codec_prefix
           
-          # Setup NDK Toolchain Paths
           export ANDROID_NDK_ROOT="/usr/local/lib/android/sdk/ndk/23.2.8568313"
           export PATH=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           
-          # 2. Compile OpenSSL (for network streaming/TLS)
+          # Compile OpenSSL
           git clone --depth 1 -b openssl-3.0.12 https://github.com/openssl/openssl.git
           cd openssl
           ./Configure android-arm64 -D__ANDROID_API__=24 --prefix=$PREFIX
@@ -62,14 +59,16 @@ jobs:
           make install_sw
           cd ..
           
-          # 3. Compile libvpx (VP8/VP9)
+          # Compile libvpx (Forced Clang Override)
           cd $GDE_DIR/libvpx
+          export CC=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          export CXX=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
           ./configure --target=arm64-android-gcc --prefix=$PREFIX --disable-examples --disable-tools --disable-docs --enable-pic
           make -j$(nproc)
           make install
           cd $GITHUB_WORKSPACE
           
-          # 4. Compile libaom (AV1)
+          # Compile libaom
           cd $GDE_DIR/libaom
           mkdir -p build_android && cd build_android
           cmake .. \
@@ -103,6 +102,7 @@ jobs:
             --sysroot=$TOOLCHAIN/sysroot \
             --extra-cflags="-I$PREFIX/include" \
             --extra-ldflags="-L$PREFIX/lib" \
+            --extra-libs="-lm" \
             --disable-programs \
             --disable-doc \
             --disable-static \
@@ -140,8 +140,6 @@ jobs:
 
       - name: Inject Android Export Preset
         run: |
-          # Since GoZen is primarily a desktop project, it likely lacks an Android export preset.
-          # This dynamically generates a basic preset to allow headless exporting.
           cat <<EOF > export_presets.cfg
           [preset.0]
           name="Android"
@@ -149,6 +147,9 @@ jobs:
           runnable=true
           custom_template/debug=""
           custom_template/release=""
+          keystore/debug="~/.android/debug.keystore"
+          keystore/debug_user="androiddebugkey"
+          keystore/debug_password="android"
           EOF
 
       - name: Setup Godot Headless
@@ -161,8 +162,7 @@ jobs:
       - name: Export Android APK
         run: |
           mkdir -p build
-          # Requires a valid debug keystore for exporting, which setup-android handles.
-          godot --headless --export-release "Android" build/GoZen.apk
+          godot --headless --export-debug "Android" build/GoZen.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
