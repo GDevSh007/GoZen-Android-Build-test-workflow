@@ -1,7 +1,7 @@
 name: Remote Build GoZen Android Project ZIP
 
 on:
-  workflow_dispatch:          # Manual trigger only
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,7 +14,7 @@ jobs:
 
     steps:
       # ------------------------------------------------------------------
-      # 1. Checkout (use the official mirrors; update if you move to Codeberg)
+      # 1. Checkout
       # ------------------------------------------------------------------
       - name: Checkout GoZen
         uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
 
       # ------------------------------------------------------------------
-      # 2. Toolchain setup
+      # 2. Toolchain
       # ------------------------------------------------------------------
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -32,15 +32,18 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Setup Android SDK + NDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
         with:
-          packages: |
-            platform-tools
-            build-tools;34.0.0
-            platforms;android-34
-            ndk;23.2.8568313
-            cmake;3.22.1
+          packages: 'platform-tools'
+
+      - name: Install required Android packages
+        run: |
+          sdkmanager \
+            "build-tools;35.0.0" \
+            "platforms;android-35" \
+            "ndk;28.1.13356709" \
+            "cmake;3.22.1"
 
       - name: Setup Python + SCons
         uses: actions/setup-python@v5
@@ -67,10 +70,10 @@ jobs:
           path: |
             codec_prefix
             core/gde_gozen/ffmpeg
-          key: codecs-arm64-${{ hashFiles('core/gde_gozen/**/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v1
+          key: codecs-arm64-ndk28-${{ hashFiles('core/gde_gozen/**/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v2
 
       # ------------------------------------------------------------------
-      # 4. Build external codecs (only if cache miss)
+      # 4. Build external codecs (only on cache miss)
       # ------------------------------------------------------------------
       - name: Build External Codecs (OpenSSL, VPX, AOM)
         if: steps.cache-codecs.outputs.cache-hit != 'true'
@@ -80,7 +83,7 @@ jobs:
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
           mkdir -p "$PREFIX"
 
-          export ANDROID_NDK_ROOT="/usr/local/lib/android/sdk/ndk/23.2.8568313"
+          export ANDROID_NDK_ROOT="/usr/local/lib/android/sdk/ndk/28.1.13356709"
           export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           export CC=aarch64-linux-android24-clang
           export CXX=aarch64-linux-android24-clang++
@@ -120,7 +123,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
-      # 5. Cross-compile FFmpeg (shared, with the codecs)
+      # 5. Cross-compile FFmpeg
       # ------------------------------------------------------------------
       - name: Cross-Compile FFmpeg (arm64)
         if: steps.cache-codecs.outputs.cache-hit != 'true'
@@ -128,7 +131,7 @@ jobs:
           set -euo pipefail
           cd ./core/gde_gozen/ffmpeg
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
-          NDK_PATH="/usr/local/lib/android/sdk/ndk/23.2.8568313"
+          NDK_PATH="/usr/local/lib/android/sdk/ndk/28.1.13356709"
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           API=24
 
@@ -163,14 +166,14 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
-      # 6. Compile the GDExtension
+      # 6. Compile GDExtension
       # ------------------------------------------------------------------
       - name: Compile GDExtension (arm64)
         run: |
           set -euo pipefail
           cd ./core/gde_gozen
 
-          # Safely patch SConstruct: remove "tls", inject paths
+          # Patch SConstruct: remove "tls", inject paths
           python3 << 'EOF'
           import os
           prefix = os.environ["GITHUB_WORKSPACE"] + "/codec_prefix/lib"
@@ -178,7 +181,6 @@ jobs:
               lines = f.readlines()
           with open("SConstruct", "w") as f:
               for line in lines:
-                  # Strip unsupported 'tls' library
                   for bad in ['"tls"', "'tls'"]:
                       line = line.replace(bad + ",", "")
                       line = line.replace(", " + bad, "")
@@ -191,20 +193,17 @@ jobs:
                   f.write(line)
           EOF
 
-          # Build
+          # Build release + debug
           scons platform=android target=template_release arch=arm64 -j$(nproc)
-
-          # Also build a debug variant (useful for the editor)
-          scons platform=android target=template_debug arch=arm64 -j$(nproc)
+          scons platform=android target=template_debug   arch=arm64 -j$(nproc)
 
       # ------------------------------------------------------------------
-      # 7. Locate binaries & patch .gdextension robustly
+      # 7. Locate binaries & patch .gdextension
       # ------------------------------------------------------------------
       - name: Patch GDExtension & copy binaries
         run: |
           set -euo pipefail
 
-          # Find the real .gdextension (ignore the test_room one)
           EXT_FILE=$(find . -name "*.gdextension" | grep -v "core/gde_gozen" | head -n1)
           if [ -z "$EXT_FILE" ]; then
             echo "ERROR: Could not find main .gdextension file"
@@ -215,21 +214,18 @@ jobs:
 
           mkdir -p "$EXT_DIR/bin"
 
-          # Copy both release and debug .so (search for them)
           find ./core/gde_gozen -name "libgozen.android.template_release.arm64.so" -exec cp {} "$EXT_DIR/bin/" \;
           find ./core/gde_gozen -name "libgozen.android.template_debug.arm64.so"   -exec cp {} "$EXT_DIR/bin/" \;
 
-          # Make sure we actually have the binaries
           ls -la "$EXT_DIR/bin/"
 
-          # Robustly inject the library entries (Python is safer than sed)
+          # Robustly inject library entries
           python3 << EOF
           import re
           path = "$EXT_FILE"
           with open(path) as f:
               content = f.read()
 
-          # Remove any existing android.* lines under [libraries]
           content = re.sub(r'android\.(debug|release)\.arm64\s*=.*\n?', '', content)
 
           libs = '''[libraries]
@@ -248,221 +244,13 @@ jobs:
           EOF
 
       # ------------------------------------------------------------------
-      # 8. Optional: create a minimal export_presets.cfg (handy if someone
-      #    later wants to export an APK from the Android editor)
-      # ------------------------------------------------------------------
-      - name: Create helper export_presets.cfg
-        run: |
-          cat > export_presets.cfg << 'EOF'
-          [preset.0]
-          name="Android"
-          platform="Android"
-          runnable=true
-          advanced_options=false
-          dedicated_server=false
-          custom_features=""
-          export_filter="all_resources"
-          include_filter=""
-          exclude_filter=""
-          export_path="build/GoZen.apk"
-          encryption_include_filters=""
-          encryption_exclude_filters=""
-          encrypt_pck=false
-          encrypt_directory=false
-          script_export_mode=2
-
-          [preset.0.options]
-          custom_template/debug=""
-          custom_template/release=""
-          gradle_build/use_gradle_build=false
-          gradle_build/export_format=0
-          gradle_build/min_sdk=""
-          gradle_build/target_sdk=""
-          architectures/armeabi-v7a=false
-          architectures/arm64-v8a=true
-          architectures/x86=false
-          architectures/x86_64=false
-          version/code=1
-          version/name=""
-          package/unique_name="com.voylins.gozen"
-          package/name="GoZen"
-          package/signed=true
-          package/app_category=2
-          package/retain_data_on_uninstall=false
-          package/exclude_from_recents=false
-          launcher_icons/main_192x192=""
-          launcher_icons/adaptive_foreground_432x432=""
-          launcher_icons/adaptive_background_432x432=""
-          graphics/opengl_debug=false
-          xr_features/xr_mode=0
-          gesture/swipe_to_dismiss=true
-          screen/immersive_mode=true
-          screen/support_small=true
-          screen/support_normal=true
-          screen/support_large=true
-          screen/support_xlarge=true
-          user_data_backup/allow=false
-          command_line/extra_args=""
-          apk_expansion/enable=false
-          apk_expansion/SALT=""
-          apk_expansion/public_key=""
-          permissions/custom_permissions=false
-          permissions/access_checkin_properties=false
-          permissions/access_coarse_location=false
-          permissions/access_fine_location=false
-          permissions/access_location_extra_commands=false
-          permissions/access_mock_location=false
-          permissions/access_network_state=true
-          permissions/access_surface_flinger=false
-          permissions/access_wifi_state=false
-          permissions/account_manager=false
-          permissions/add_voicemail=false
-          permissions/authenticate_accounts=false
-          permissions/battery_stats=false
-          permissions/bind_accessibility_service=false
-          permissions/bind_appwidget=false
-          permissions/bind_device_admin=false
-          permissions/bind_input_method=false
-          permissions/bind_nfc_service=false
-          permissions/bind_notification_listener_service=false
-          permissions/bind_print_service=false
-          permissions/bind_remoteviews=false
-          permissions/bind_text_service=false
-          permissions/bind_vpn_service=false
-          permissions/bind_wallpaper=false
-          permissions/bluetooth=false
-          permissions/bluetooth_admin=false
-          permissions/bluetooth_privileged=false
-          permissions/brick=false
-          permissions/broadcast_package_removed=false
-          permissions/broadcast_sms=false
-          permissions/broadcast_sticky=false
-          permissions/broadcast_wap_push=false
-          permissions/call_phone=false
-          permissions/call_privileged=false
-          permissions/camera=false
-          permissions/capture_audio_output=false
-          permissions/capture_secure_video_output=false
-          permissions/capture_video_output=false
-          permissions/change_component_enabled_state=false
-          permissions/change_configuration=false
-          permissions/change_network_state=false
-          permissions/change_wifi_multicast_state=false
-          permissions/change_wifi_state=false
-          permissions/clear_app_cache=false
-          permissions/clear_app_user_data=false
-          permissions/control_location_updates=false
-          permissions/delete_cache_files=false
-          permissions/delete_packages=false
-          permissions/device_power=false
-          permissions/diagnostic=false
-          permissions/disable_keyguard=false
-          permissions/dump=false
-          permissions/expand_status_bar=false
-          permissions/factory_test=false
-          permissions/flashlight=false
-          permissions/force_back=false
-          permissions/get_accounts=false
-          permissions/get_package_size=false
-          permissions/get_tasks=false
-          permissions/get_top_activity_info=false
-          permissions/global_search=false
-          permissions/hardware_test=false
-          permissions/inject_events=false
-          permissions/install_location_provider=false
-          permissions/install_packages=false
-          permissions/install_shortcut=false
-          permissions/internal_system_window=false
-          permissions/internet=true
-          permissions/kill_background_processes=false
-          permissions/location_hardware=false
-          permissions/manage_accounts=false
-          permissions/manage_app_tokens=false
-          permissions/manage_documents=false
-          permissions/master_clear=false
-          permissions/media_content_control=false
-          permissions/modify_audio_settings=false
-          permissions/modify_phone_state=false
-          permissions/mount_format_filesystems=false
-          permissions/mount_unmount_filesystems=false
-          permissions/nfc=false
-          permissions/permanent_disable=false
-          permissions/process_outgoing_calls=false
-          permissions/read_calendar=false
-          permissions/read_call_log=false
-          permissions/read_contacts=false
-          permissions/read_external_storage=true
-          permissions/read_frame_buffer=false
-          permissions/read_history_bookmarks=false
-          permissions/read_input_state=false
-          permissions/read_logs=false
-          permissions/read_phone_state=false
-          permissions/read_profile=false
-          permissions/read_sms=false
-          permissions/read_social_stream=false
-          permissions/read_sync_settings=false
-          permissions/read_sync_stats=false
-          permissions/read_user_dictionary=false
-          permissions/reboot=false
-          permissions/receive_boot_completed=false
-          permissions/receive_mms=false
-          permissions/receive_sms=false
-          permissions/receive_wap_push=false
-          permissions/record_audio=false
-          permissions/reorder_tasks=false
-          permissions/restart_packages=false
-          permissions/send_respond_via_message=false
-          permissions/send_sms=false
-          permissions/set_activity_watcher=false
-          permissions/set_alarm=false
-          permissions/set_always_finish=false
-          permissions/set_animation_scale=false
-          permissions/set_debug_app=false
-          permissions/set_orientation=false
-          permissions/set_pointer_speed=false
-          permissions/set_preferred_applications=false
-          permissions/set_process_limit=false
-          permissions/set_time=false
-          permissions/set_time_zone=false
-          permissions/set_wallpaper=false
-          permissions/set_wallpaper_hints=false
-          permissions/signal_permanent_disable=false
-          permissions/status_bar=false
-          permissions/subscribed_feeds_read=false
-          permissions/subscribed_feeds_write=false
-          permissions/system_alert_window=false
-          permissions/transmit_ir=false
-          permissions/uninstall_shortcut=false
-          permissions/update_device_stats=false
-          permissions/use_credentials=false
-          permissions/use_sip=false
-          permissions/vibrate=false
-          permissions/wake_lock=false
-          permissions/write_apn_settings=false
-          permissions/write_calendar=false
-          permissions/write_call_log=false
-          permissions/write_contacts=false
-          permissions/write_external_storage=true
-          permissions/write_gservices=false
-          permissions/write_history_bookmarks=false
-          permissions/write_profile=false
-          permissions/write_secure_settings=false
-          permissions/write_settings=false
-          permissions/write_sms=false
-          permissions/write_social_stream=false
-          permissions/write_sync_settings=false
-          permissions/write_user_dictionary=false
-          EOF
-
-      # ------------------------------------------------------------------
-      # 9. Create the final project ZIP
+      # 8. Create the final project ZIP
       # ------------------------------------------------------------------
       - name: Create project ZIP
         run: |
           set -euo pipefail
           mkdir -p dist
 
-          # Exclude heavy / unnecessary folders
           zip -r dist/GoZen-Android-Project.zip . \
             -x "*.git*" \
             -x "*core/gde_gozen/libvpx*" \
@@ -482,7 +270,7 @@ jobs:
           ls -lh dist/
 
       # ------------------------------------------------------------------
-      # 10. Upload artifact
+      # 9. Upload artifact
       # ------------------------------------------------------------------
       - name: Upload Project ZIP
         uses: actions/upload-artifact@v4
