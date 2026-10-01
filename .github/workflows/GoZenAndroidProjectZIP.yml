@@ -215,13 +215,14 @@ jobs:
               with open(f_hpp, "r") as f:
                   content = f.read()
               
-              # Add missing Godot headers so GDCLASS works
+              # Add missing Godot headers
               if "<godot_cpp/classes/audio_stream.hpp>" not in content:
                   content = content.replace("#include <godot_cpp/classes/audio_stream_playback.hpp>", 
                                             "#include <godot_cpp/classes/audio_stream.hpp>\n#include <godot_cpp/classes/mutex.hpp>\n#include <godot_cpp/classes/audio_stream_playback.hpp>")
               
-              # Fix Mutex namespace
-              content = content.replace("Mutex* mutex", "godot::Mutex* mutex")
+              # Fix godot-cpp master branch breaking changes: Mutex is now CoreBind::Mutex and requires Ref<>
+              content = content.replace("godot::Mutex* mutex = nullptr;", "godot::Ref<godot::CoreBind::Mutex> mutex;")
+              content = content.replace("Mutex* mutex = nullptr;", "godot::Ref<godot::CoreBind::Mutex> mutex;")
               
               # Fix private member access (inject friend class)
               if "friend class AudioStreamFFmpeg;" not in content:
@@ -238,8 +239,13 @@ jobs:
               with open(f_cpp, "r") as f:
                   content = f.read()
               
-              # Fix memnew Mutex namespace
-              content = content.replace("memnew(Mutex)", "memnew(godot::Mutex)")
+              # Fix memnew initialization for the CoreBind namespace
+              content = content.replace("memnew(godot::Mutex)", "memnew(godot::CoreBind::Mutex)")
+              content = content.replace("memnew(Mutex)", "memnew(godot::CoreBind::Mutex)")
+              
+              # Ref<> is auto-managed. We must prevent double-free crashes by removing manual deletions.
+              content = content.replace("memdelete(mutex);", "// memdelete(mutex);")
+              content = content.replace("delete mutex;", "// delete mutex;")
               
               with open(f_cpp, "w") as f:
                   f.write(content)
