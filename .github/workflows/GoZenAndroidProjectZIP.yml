@@ -188,6 +188,23 @@ jobs:
           make install
 
       # ------------------------------------------------------------------
+      # 6.5. Patch Upstream C++ Code
+      # ------------------------------------------------------------------
+      - name: Patch missing Math_PI
+        run: |
+          set -euo pipefail
+          
+          # Inject Math_PI definition at the very top of the failing file
+          FILE="core/gde_gozen/smb_pitch_shift.hpp"
+          if [ -f "$FILE" ]; then
+            sed -i '1i #ifndef Math_PI\n#define Math_PI 3.14159265358979323846\n#endif\n' "$FILE"
+            echo "Successfully patched $FILE with Math_PI definition."
+          else
+            echo "ERROR: $FILE not found to patch!"
+            exit 1
+          fi
+
+      # ------------------------------------------------------------------
       # 7. Compile GDExtension (arm64)
       # ------------------------------------------------------------------
       - name: Compile GDExtension (arm64)
