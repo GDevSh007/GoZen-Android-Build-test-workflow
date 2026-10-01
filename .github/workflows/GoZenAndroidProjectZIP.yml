@@ -64,7 +64,7 @@ jobs:
             codec_prefix
             core/ffmpeg
             core/gde_gozen/ffmpeg
-          key: codecs-arm64-ndk28-godotcpp48-${{ hashFiles('core/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v4
+          key: codecs-arm64-ndk28-godotcpp47-${{ hashFiles('core/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v5
 
       # ------------------------------------------------------------------
       # 4. Prepare native deps + godot-cpp 4.8
@@ -74,7 +74,6 @@ jobs:
           set -euo pipefail
           cd ./core
 
-          # Libraries live under gde_gozen in this monorepo
           GDE_DIR="gde_gozen"
 
           if [ ! -d "$GDE_DIR/libvpx" ]; then
@@ -92,8 +91,7 @@ jobs:
             git clone --depth 1 -b n7.1 https://github.com/FFmpeg/FFmpeg.git "$GDE_DIR/ffmpeg"
           fi
 
-          # godot_cpp must sit next to SConstruct (i.e. in ./core)
-          # Folder name MUST be godot_cpp (underscore)
+          # godot_cpp must sit next to SConstruct
           echo "Injecting godot-cpp master as godot_cpp (for 4.8-dev7)..."
           rm -rf godot_cpp godot-cpp
           git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git godot_cpp
@@ -197,7 +195,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
-      # 7. Compile GDExtension
+      # 7. Compile GDExtension (with forced include paths)
       # ------------------------------------------------------------------
       - name: Compile GDExtension (arm64)
         run: |
@@ -219,7 +217,10 @@ jobs:
             exit 1
           fi
 
-          # Patch SConstruct
+          # ------------------------------------------------------------------
+          # Option 1: Force full include paths so complete class definitions
+          # are visible (fixes incomplete GetTypeInfo / Ref<> errors)
+          # ------------------------------------------------------------------
           python3 << 'EOF'
           import os
           workspace = os.environ["GITHUB_WORKSPACE"]
@@ -231,23 +232,30 @@ jobs:
 
           with open("SConstruct", "w") as f:
               for line in lines:
+                  # Remove "tls" references
                   for bad in ['"tls"', "'tls'"]:
                       line = line.replace(bad + ",", "")
                       line = line.replace(", " + bad, "")
                       line = line.replace(bad, '""')
 
+                  # Inject paths + forced includes just before SharedLibrary
                   if "env.SharedLibrary" in line:
                       indent = line[:len(line) - len(line.lstrip())]
+                      # Include paths (headers)
                       f.write(f'{indent}env.Append(CPPPATH=["gde_gozen", "{prefix_inc}"])\n')
+                      # Force the compiler to look in gde_gozen first
+                      f.write(f'{indent}env.Append(CXXFLAGS=["-Igde_gozen", "-I{prefix_inc}"])\n')
+                      # Library search path
                       f.write(f'{indent}env.Append(LIBPATH=["{prefix_lib}"])\n')
+                      # Required libraries
                       f.write(f'{indent}env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"])\n')
                   f.write(line)
           EOF
 
-          # Build
+          # Build (api_version=4.7 is the highest currently accepted)
           scons platform=android target=template_release arch=arm64 api_version=4.7 -j$(nproc)
           scons platform=android target=template_debug   arch=arm64 api_version=4.7 -j$(nproc)
-      
+
       # ------------------------------------------------------------------
       # 8. Locate binaries & patch .gdextension
       # ------------------------------------------------------------------
@@ -255,7 +263,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Find the main .gdextension file (usually under addons/)
           EXT_FILE=$(find . -name "*.gdextension" | head -n1)
           if [ -z "$EXT_FILE" ]; then
             echo "ERROR: Could not find any .gdextension file"
@@ -267,24 +274,21 @@ jobs:
 
           mkdir -p "$EXT_DIR/bin"
 
-          # Copy the compiled .so files (they are produced under core/)
+          # Copy compiled .so files
           find ./core -name "libgozen.android.template_release.arm64.so" -exec cp {} "$EXT_DIR/bin/" \;
           find ./core -name "libgozen.android.template_debug.arm64.so"   -exec cp {} "$EXT_DIR/bin/" \;
-
-          # Also try common alternative names / locations
           find . -name "*gozen*arm64*.so" -exec cp {} "$EXT_DIR/bin/" \; 2>/dev/null || true
 
           echo "=== Binaries in $EXT_DIR/bin ==="
           ls -la "$EXT_DIR/bin/" || true
 
-          # Inject android library entries into the .gdextension file
+          # Inject android library entries
           python3 << EOF
           import re
           path = "$EXT_FILE"
           with open(path) as f:
               content = f.read()
 
-          # Remove any existing android arm64 lines
           content = re.sub(r'android\.(debug|release)\.arm64\s*=.*\n?', '', content)
 
           libs = '''[libraries]
