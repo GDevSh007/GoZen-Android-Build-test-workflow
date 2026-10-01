@@ -214,6 +214,10 @@ jobs:
                   content = content.replace("class AudioStreamFFmpegPlayback : public godot::AudioStreamPlayback {", 
                                             "class AudioStreamFFmpegPlayback : public godot::AudioStreamPlayback {\n    friend class AudioStreamFFmpeg;\n")
               content = content.replace("Mutex* mutex", "godot::Mutex* mutex")
+              
+              # FIX: Update the signature to match Godot 4.3's double precision change
+              content = content.replace("float _get_stream_sampling_rate() const override", "double _get_stream_sampling_rate() const override")
+              
               with open(f_hpp, "w") as f: f.write(content)
 
           # 3. Patch audio_stream_ffmpeg.cpp
