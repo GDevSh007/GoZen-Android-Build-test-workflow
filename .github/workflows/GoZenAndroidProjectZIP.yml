@@ -238,6 +238,9 @@ jobs:
             exit 1
           fi
 
+          # FIX: Explicitly tell SCons where to find the NDK we downloaded in Step 2
+          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.1.13356709"
+
           python3 << 'EOF'
           import os
           workspace = os.environ.get("GITHUB_WORKSPACE", "")
@@ -258,7 +261,6 @@ jobs:
                   f.write(line)
           EOF
 
-          # Removed custom api_version flag so SCons naturally defaults to 4.3 bindings
           scons platform=android target=template_release arch=arm64 -j$(nproc)
           scons platform=android target=template_debug   arch=arm64 -j$(nproc)
 
