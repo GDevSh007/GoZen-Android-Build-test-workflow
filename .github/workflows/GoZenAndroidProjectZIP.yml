@@ -78,39 +78,31 @@ jobs:
       - name: Clone required libraries + godot-cpp 4.8
         run: |
           set -euo pipefail
-          GDE_DIR="./core/gde_gozen"
-          cd "$GDE_DIR"
+          cd ./core
 
-          # libvpx
-          if [ ! -d "libvpx" ]; then
-            echo "Cloning libvpx..."
-            git clone --depth 1 https://chromium.googlesource.com/webm/libvpx
+          # libvpx / libaom / ffmpeg live under gde_gozen in this monorepo
+          GDE_DIR="gde_gozen"
+
+          if [ ! -d "$GDE_DIR/libvpx" ]; then
+            git clone --depth 1 https://chromium.googlesource.com/webm/libvpx "$GDE_DIR/libvpx"
+          fi
+          if [ ! -d "$GDE_DIR/libaom" ]; then
+            git clone --depth 1 https://aomedia.googlesource.com/aom "$GDE_DIR/libaom"
+          fi
+          if [ ! -d "$GDE_DIR/ffmpeg" ]; then
+            git clone --depth 1 -b n7.1 https://github.com/FFmpeg/FFmpeg.git "$GDE_DIR/ffmpeg"
           fi
 
-          # libaom
-          if [ ! -d "libaom" ]; then
-            echo "Cloning libaom..."
-            git clone --depth 1 https://aomedia.googlesource.com/aom libaom
-          fi
-
-          # FFmpeg
-          if [ ! -d "ffmpeg" ]; then
-            echo "Cloning FFmpeg n7.1..."
-            git clone --depth 1 -b n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
-          fi
-          
-          # Force latest godot-cpp (compatible with 4.8-dev7)
-          # IMPORTANT: folder must be named "godot_cpp" (underscore)
-          echo "Injecting godot-cpp master as godot_cpp..."
-          rm -rf godot-cpp godot_cpp
+          # godot_cpp must be next to SConstruct (i.e. in ./core)
+          rm -rf godot_cpp godot-cpp
           git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git godot_cpp
           cd godot_cpp
           git submodule update --init --recursive
           cd ..
 
-          echo "Native deps + godot-cpp ready"
+          echo "Ready – listing core/"
           ls -la
-
+      
       # ------------------------------------------------------------------
       # 5. Build external codecs (OpenSSL, VPX, AOM)
       # ------------------------------------------------------------------
@@ -211,15 +203,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          GDE_DIR="./core/gde_gozen"
-          if [ ! -d "$GDE_DIR" ]; then
-            echo "ERROR: $GDE_DIR does not exist"
-            find . -maxdepth 3 -type d -name "*gozen*" || true
-            exit 1
-          fi
+          # In the GoZen monorepo the SConstruct lives in ./core
+          cd ./core
 
-          cd "$GDE_DIR"
-          echo "=== Contents of $GDE_DIR ==="
+          echo "=== Contents of ./core ==="
           ls -la
 
           if [ ! -f "SConstruct" ]; then
@@ -228,19 +215,13 @@ jobs:
             exit 1
           fi
 
-          # Ensure godot_cpp exists with the name the SConstruct expects
-          if [ -d "godot-cpp" ] && [ ! -d "godot_cpp" ]; then
-            mv godot-cpp godot_cpp
-          fi
+          # Make sure godot_cpp exists (we already injected it earlier)
           if [ ! -d "godot_cpp" ]; then
-            echo "Cloning godot-cpp as godot_cpp (required by SConstruct)..."
-            git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git godot_cpp
-            cd godot_cpp
-            git submodule update --init --recursive
-            cd ..
+            echo "ERROR: godot_cpp directory missing"
+            exit 1
           fi
 
-          # Patch SConstruct: remove "tls", inject extra library paths
+          # Patch SConstruct: remove "tls", inject library paths
           python3 << 'EOF'
           import os
           prefix = os.environ["GITHUB_WORKSPACE"] + "/codec_prefix/lib"
@@ -254,16 +235,16 @@ jobs:
                       line = line.replace(bad, '""')
                   if "env.SharedLibrary" in line:
                       indent = line[:len(line) - len(line.lstrip())]
-                      f.write(f'{indent}env.Append(CPPPATH=["ffmpeg"])\n')
-                      f.write(f'{indent}env.Append(LIBPATH=["ffmpeg/libavformat", "ffmpeg/libavcodec", "ffmpeg/libavutil", "ffmpeg/libswscale", "ffmpeg/libswresample", "{prefix}"])\n')
+                      f.write(f'{indent}env.Append(CPPPATH=["gde_gozen", "gde_gozen/ffmpeg"])\n')
+                      f.write(f'{indent}env.Append(LIBPATH=["gde_gozen/ffmpeg/libavformat", "gde_gozen/ffmpeg/libavcodec", "gde_gozen/ffmpeg/libavutil", "gde_gozen/ffmpeg/libswscale", "gde_gozen/ffmpeg/libswresample", "{prefix}"])\n')
                       f.write(f'{indent}env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"])\n')
                   f.write(line)
           EOF
 
-          # Build
+          # Build from ./core
           scons platform=android target=template_release arch=arm64 -j$(nproc)
           scons platform=android target=template_debug   arch=arm64 -j$(nproc)
-
+      
       # ------------------------------------------------------------------
       # 8. Locate binaries & patch .gdextension
       # ------------------------------------------------------------------
