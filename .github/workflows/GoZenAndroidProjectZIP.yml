@@ -64,13 +64,12 @@ jobs:
             codec_prefix
             core/ffmpeg
             core/gde_gozen/ffmpeg
-          # FIX: Removed .cpp files from hash so logic changes don't trigger 20-min codec rebuilds
-          key: codecs-arm64-ndk28-godotcpp47-${{ hashFiles('core/SConstruct', '.github/workflows/*.yml') }}-v6
+          key: codecs-arm64-ndk28-godotcpp43-${{ hashFiles('core/SConstruct', '.github/workflows/*.yml') }}-v7
 
       # ------------------------------------------------------------------
-      # 4. Prepare native deps + godot-cpp 4.8
+      # 4. Prepare native deps + godot-cpp 4.3 Stable
       # ------------------------------------------------------------------
-      - name: Clone required libraries + godot-cpp 4.8
+      - name: Clone required libraries + godot-cpp
         run: |
           set -euo pipefail
           cd ./core
@@ -90,7 +89,8 @@ jobs:
           fi
 
           rm -rf godot_cpp godot-cpp
-          git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git godot_cpp
+          # FIX: Clone stable 4.3 branch instead of master
+          git clone --depth 1 -b godot-4.3-stable https://github.com/godotengine/godot-cpp.git godot_cpp
           cd godot_cpp
           git submodule update --init --recursive
 
@@ -104,13 +104,12 @@ jobs:
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
           mkdir -p "$PREFIX"
 
-          # FIX: Use dynamic ANDROID_HOME instead of hardcoded Ubuntu runner paths
           export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.1.13356709"
           export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           export CC=aarch64-linux-android24-clang
           export CXX=aarch64-linux-android24-clang++
 
-          # ---------- OpenSSL ----------
+          # OpenSSL
           git clone --depth 1 -b openssl-3.0.12 https://github.com/openssl/openssl.git
           cd openssl
           ./Configure android-arm64 -D__ANDROID_API__=24 --prefix="$PREFIX" no-shared
@@ -118,7 +117,7 @@ jobs:
           make install_sw
           cd "$GITHUB_WORKSPACE"
 
-          # ---------- libvpx ----------
+          # libvpx
           cd ./core/gde_gozen/libvpx
           ./configure \
             --target=arm64-android-gcc \
@@ -129,7 +128,7 @@ jobs:
           make install
           cd "$GITHUB_WORKSPACE"
 
-          # ---------- libaom ----------
+          # libaom
           cd ./core/gde_gozen/libaom
           mkdir -p build_android && cd build_android
           cmake .. \
@@ -153,7 +152,6 @@ jobs:
           cd ./core/gde_gozen/ffmpeg
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
           
-          # FIX: Use dynamic ANDROID_HOME
           NDK_PATH="$ANDROID_HOME/ndk/28.1.13356709"
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           API=24
@@ -188,7 +186,7 @@ jobs:
           make install
 
       # ------------------------------------------------------------------
-      # 6.5. Patch Upstream C++ Code
+      # 7. Patch Upstream C++ Code (Fixing syntax/header errors only)
       # ------------------------------------------------------------------
       - name: Patch Upstream C++ Code
         run: |
@@ -198,91 +196,59 @@ jobs:
           python3 << 'EOF'
           import os
 
-          # --- 1. Patch smb_pitch_shift.hpp (Math_PI) ---
+          # 1. Patch Math_PI
           f_math = "smb_pitch_shift.hpp"
           if os.path.exists(f_math):
-              with open(f_math, "r") as f:
-                  content = f.read()
+              with open(f_math, "r") as f: content = f.read()
               if "Math_PI" not in content[:500]:
-                  content = "#ifndef Math_PI\n#define Math_PI 3.14159265358979323846\n#endif\n" + content
                   with open(f_math, "w") as f:
-                      f.write(content)
-              print("Patched Math_PI")
+                      f.write("#ifndef Math_PI\n#define Math_PI 3.14159265358979323846\n#endif\n" + content)
 
-          # --- 2. Patch audio_stream_ffmpeg.hpp ---
+          # 2. Patch audio_stream_ffmpeg.hpp
           f_hpp = "audio_stream_ffmpeg.hpp"
           if os.path.exists(f_hpp):
-              with open(f_hpp, "r") as f:
-                  content = f.read()
-              
-              # Add missing Godot headers
+              with open(f_hpp, "r") as f: content = f.read()
               if "<godot_cpp/classes/audio_stream.hpp>" not in content:
                   content = content.replace("#include <godot_cpp/classes/audio_stream_playback.hpp>", 
                                             "#include <godot_cpp/classes/audio_stream.hpp>\n#include <godot_cpp/classes/mutex.hpp>\n#include <godot_cpp/classes/audio_stream_playback.hpp>")
-              
-              # Fix godot-cpp master branch breaking changes: Mutex is now CoreBind::Mutex and requires Ref<>
-              content = content.replace("godot::Mutex* mutex = nullptr;", "godot::Ref<godot::CoreBind::Mutex> mutex;")
-              content = content.replace("Mutex* mutex = nullptr;", "godot::Ref<godot::CoreBind::Mutex> mutex;")
-              
-              # Fix private member access (inject friend class)
               if "friend class AudioStreamFFmpeg;" not in content:
                   content = content.replace("class AudioStreamFFmpegPlayback : public godot::AudioStreamPlayback {", 
                                             "class AudioStreamFFmpegPlayback : public godot::AudioStreamPlayback {\n    friend class AudioStreamFFmpeg;\n")
-                                            
-              with open(f_hpp, "w") as f:
-                  f.write(content)
-              print("Patched audio_stream_ffmpeg.hpp")
+              content = content.replace("Mutex* mutex", "godot::Mutex* mutex")
+              with open(f_hpp, "w") as f: f.write(content)
 
-          # --- 3. Patch audio_stream_ffmpeg.cpp ---
+          # 3. Patch audio_stream_ffmpeg.cpp
           f_cpp = "audio_stream_ffmpeg.cpp"
           if os.path.exists(f_cpp):
-              with open(f_cpp, "r") as f:
-                  content = f.read()
-              
-              # Fix memnew initialization for the CoreBind namespace
-              content = content.replace("memnew(godot::Mutex)", "memnew(godot::CoreBind::Mutex)")
-              content = content.replace("memnew(Mutex)", "memnew(godot::CoreBind::Mutex)")
-              
-              # Ref<> is auto-managed. We must prevent double-free crashes by removing manual deletions.
-              content = content.replace("memdelete(mutex);", "// memdelete(mutex);")
-              content = content.replace("delete mutex;", "// delete mutex;")
-              
-              with open(f_cpp, "w") as f:
-                  f.write(content)
-              print("Patched audio_stream_ffmpeg.cpp")
+              with open(f_cpp, "r") as f: content = f.read()
+              content = content.replace("memnew(Mutex)", "memnew(godot::Mutex)")
+              with open(f_cpp, "w") as f: f.write(content)
           EOF
 
       # ------------------------------------------------------------------
-      # 7. Compile GDExtension (arm64)
+      # 8. Compile GDExtension
       # ------------------------------------------------------------------
       - name: Compile GDExtension (arm64)
         run: |
           set -euo pipefail
           cd ./core
 
-          # Verify FFmpeg headers exist
           if [ ! -f "$GITHUB_WORKSPACE/codec_prefix/include/libavcodec/avcodec.h" ]; then
             echo "ERROR: FFmpeg headers not found in codec_prefix"
             exit 1
           fi
 
-          # Force inject include and library paths into SConstruct so SCons explicitly finds FFmpeg
           python3 << 'EOF'
           import os
           workspace = os.environ.get("GITHUB_WORKSPACE", "")
           prefix_lib = os.path.join(workspace, "codec_prefix", "lib")
           prefix_inc = os.path.join(workspace, "codec_prefix", "include")
 
-          with open("SConstruct", "r") as f:
-              lines = f.readlines()
-
+          with open("SConstruct", "r") as f: lines = f.readlines()
           with open("SConstruct", "w") as f:
               for line in lines:
-                  # Remove any hardcoded "tls" references that might break the build
                   for bad in ['"tls"', "'tls'"]:
                       line = line.replace(bad + ",", "").replace(", " + bad, "").replace(bad, '""')
-
-                  # Inject paths + forced includes just before SharedLibrary is generated
                   if "env.SharedLibrary" in line:
                       indent = line[:len(line) - len(line.lstrip())]
                       f.write(f'{indent}env.Append(CPPPATH=["gde_gozen", "{prefix_inc}"])\n')
@@ -292,80 +258,49 @@ jobs:
                   f.write(line)
           EOF
 
-          scons platform=android target=template_release arch=arm64 api_version=4.7 -j$(nproc)
-          scons platform=android target=template_debug   arch=arm64 api_version=4.7 -j$(nproc)
+          # Removed custom api_version flag so SCons naturally defaults to 4.3 bindings
+          scons platform=android target=template_release arch=arm64 -j$(nproc)
+          scons platform=android target=template_debug   arch=arm64 -j$(nproc)
 
       # ------------------------------------------------------------------
-      # 8. Locate binaries & patch .gdextension
+      # 9. Patch GDExtension & copy binaries
       # ------------------------------------------------------------------
       - name: Patch GDExtension & copy binaries
         run: |
           set -euo pipefail
-
           EXT_FILE=$(find . -name "*.gdextension" | head -n1)
-          if [ -z "$EXT_FILE" ]; then
-            echo "ERROR: Could not find any .gdextension file"
-            exit 1
-          fi
           EXT_DIR=$(dirname "$EXT_FILE")
           
           mkdir -p "$EXT_DIR/bin"
-          find ./core -name "libgozen.android.template_release.arm64.so" -exec cp {} "$EXT_DIR/bin/" \;
-          find ./core -name "libgozen.android.template_debug.arm64.so"   -exec cp {} "$EXT_DIR/bin/" \;
-          find . -name "*gozen*arm64*.so" -exec cp {} "$EXT_DIR/bin/" \; 2>/dev/null || true
+          find ./core -name "*template_release.arm64.so" -exec cp {} "$EXT_DIR/bin/" \;
+          find ./core -name "*template_debug.arm64.so"   -exec cp {} "$EXT_DIR/bin/" \;
 
-          # Inject android library entries
           python3 << EOF
           import re
           path = "$EXT_FILE"
-          with open(path) as f:
-              content = f.read()
-
+          with open(path) as f: content = f.read()
           content = re.sub(r'android\.(debug|release)\.arm64\s*=.*\n?', '', content)
-
           libs = '''[libraries]
           android.debug.arm64 = "res://addons/gde_gozen/bin/libgozen.android.template_debug.arm64.so"
           android.release.arm64 = "res://addons/gde_gozen/bin/libgozen.android.template_release.arm64.so"
           '''
-
           if "[libraries]" in content:
               content = content.replace("[libraries]", libs.strip(), 1)
           else:
               content += "\n" + libs
-
-          with open(path, "w") as f:
-              f.write(content)
+          with open(path, "w") as f: f.write(content)
           EOF
 
       # ------------------------------------------------------------------
-      # 9. Create the final project ZIP
+      # 10. Create project ZIP & Upload
       # ------------------------------------------------------------------
       - name: Create project ZIP
         run: |
-          set -euo pipefail
           mkdir -p dist
-
           zip -r dist/GoZen-Android-Project.zip . \
-            -x "*.git*" \
-            -x "*core/gde_gozen/libvpx*" \
-            -x "*core/gde_gozen/libaom*" \
-            -x "*core/gde_gozen/ffmpeg*" \
-            -x "*core/ffmpeg*" \
-            -x "*core/godot_cpp*" \
-            -x "*codec_prefix*" \
-            -x "*openssl*" \
-            -x "*build*" \
-            -x "*dist*" \
-            -x "*.o" \
-            -x "*.a" \
-            -x "*.obj" \
-            -x "*__pycache__*" \
-            -x "*.pyc" \
-            -x "*compile_commands.json*"
+            -x "*.git*" "*libvpx*" "*libaom*" "*ffmpeg*" "*godot_cpp*" "*codec_prefix*" "*openssl*" \
+            -x "*build*" "*dist*" "*.o" "*.a" "*.obj" "*__pycache__*" "*.pyc" "*compile_commands.json*"
 
-      # ------------------------------------------------------------------
-      # 10. Upload artifact
-      # ------------------------------------------------------------------
       - name: Upload Project ZIP
         uses: actions/upload-artifact@v4
         with:
