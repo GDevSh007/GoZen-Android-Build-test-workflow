@@ -42,7 +42,7 @@ jobs:
           sdkmanager \
             "build-tools;35.0.0" \
             "platforms;android-35" \
-            "ndk;28.1.13356709" \
+            "ndk;23.2.8568313" \
             "cmake;3.22.1"
 
       - name: Setup Python + SCons
@@ -64,7 +64,7 @@ jobs:
             codec_prefix
             core/ffmpeg
             core/gde_gozen/ffmpeg
-          key: codecs-arm64-ndk28-godotcpp43-${{ hashFiles('core/SConstruct', '.github/workflows/*.yml') }}-v7
+          key: codecs-arm64-ndk23-godotcpp43-${{ hashFiles('core/SConstruct', '.github/workflows/*.yml') }}-v8
 
       # ------------------------------------------------------------------
       # 4. Prepare native deps + godot-cpp 4.3 Stable
@@ -89,7 +89,6 @@ jobs:
           fi
 
           rm -rf godot_cpp godot-cpp
-          # FIX: Clone stable 4.3 branch instead of master
           git clone --depth 1 -b godot-4.3-stable https://github.com/godotengine/godot-cpp.git godot_cpp
           cd godot_cpp
           git submodule update --init --recursive
@@ -104,7 +103,7 @@ jobs:
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
           mkdir -p "$PREFIX"
 
-          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.1.13356709"
+          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/23.2.8568313"
           export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           export CC=aarch64-linux-android24-clang
           export CXX=aarch64-linux-android24-clang++
@@ -152,7 +151,7 @@ jobs:
           cd ./core/gde_gozen/ffmpeg
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
           
-          NDK_PATH="$ANDROID_HOME/ndk/28.1.13356709"
+          NDK_PATH="$ANDROID_HOME/ndk/23.2.8568313"
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           API=24
 
@@ -238,8 +237,7 @@ jobs:
             exit 1
           fi
 
-          # FIX: Explicitly tell SCons where to find the NDK we downloaded in Step 2
-          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.1.13356709"
+          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/23.2.8568313"
 
           python3 << 'EOF'
           import os
