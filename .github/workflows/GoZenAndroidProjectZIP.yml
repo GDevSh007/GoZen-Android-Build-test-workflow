@@ -240,10 +240,10 @@ jobs:
                   f.write(line)
           EOF
 
-          # api_version is required by modern godot-cpp (4.8+)
-          scons platform=android target=template_release arch=arm64 api_version=4.8 -j$(nproc)
-          scons platform=android target=template_debug   arch=arm64 api_version=4.8 -j$(nproc)
-
+          # api_version is required by modern godot-cpp (4.7+)
+          scons platform=android target=template_release arch=arm64 api_version=4.7 -j$(nproc)
+          scons platform=android target=template_debug   arch=arm64 api_version=4.7 -j$(nproc)
+          
       # ------------------------------------------------------------------
       # 8. Locate binaries & patch .gdextension
       # ------------------------------------------------------------------
