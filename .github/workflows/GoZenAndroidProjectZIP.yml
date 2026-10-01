@@ -283,9 +283,17 @@ jobs:
           EXT_FILE=$(find . -name "*.gdextension" | head -n1)
           EXT_DIR=$(dirname "$EXT_FILE")
           
-          # 2. Find the exact names of the compiled Android libraries
-          DEBUG_SO=$(find ./core -name "*template_debug.arm64.so" | head -n1)
-          RELEASE_SO=$(find ./core -name "*template_release.arm64.so" | head -n1)
+          # 2. Find the exact names of the compiled Android libraries across the ENTIRE repo
+          DEBUG_SO=$(find . -name "*template_debug.arm64.so" | head -n1)
+          RELEASE_SO=$(find . -name "*template_release.arm64.so" | head -n1)
+          
+          # Safety check to ensure files were actually found
+          if [ -z "$DEBUG_SO" ] || [ -z "$RELEASE_SO" ]; then
+            echo "ERROR: Could not find the compiled .so files!"
+            echo "Here is a list of all .so files in the workspace:"
+            find . -name "*.so"
+            exit 1
+          fi
           
           DEBUG_NAME=$(basename "$DEBUG_SO")
           RELEASE_NAME=$(basename "$RELEASE_SO")
