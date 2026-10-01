@@ -194,6 +194,7 @@ jobs:
           
           python3 << 'EOF'
           import os
+          import re
 
           # 1. Patch Math_PI
           f_math = "smb_pitch_shift.hpp"
@@ -214,10 +215,7 @@ jobs:
                   content = content.replace("class AudioStreamFFmpegPlayback : public godot::AudioStreamPlayback {", 
                                             "class AudioStreamFFmpegPlayback : public godot::AudioStreamPlayback {\n    friend class AudioStreamFFmpeg;\n")
               content = content.replace("Mutex* mutex", "godot::Mutex* mutex")
-              
-              # FIX: Update the signature to match Godot 4.3's double precision change
               content = content.replace("float _get_stream_sampling_rate() const override", "double _get_stream_sampling_rate() const override")
-              
               with open(f_hpp, "w") as f: f.write(content)
 
           # 3. Patch audio_stream_ffmpeg.cpp
@@ -226,6 +224,14 @@ jobs:
               with open(f_cpp, "r") as f: content = f.read()
               content = content.replace("memnew(Mutex)", "memnew(godot::Mutex)")
               with open(f_cpp, "w") as f: f.write(content)
+
+          # 4. Patch video.cpp (Dictionary set to bracket operator)
+          f_vid = "video.cpp"
+          if os.path.exists(f_vid):
+              with open(f_vid, "r") as f: content = f.read()
+              # Converts dict.set("key", "value"); into dict["key"] = "value";
+              content = re.sub(r'dict\.set\(\s*(.*?)\s*,\s*(.*?)\s*\);', r'dict[\1] = \2;', content)
+              with open(f_vid, "w") as f: f.write(content)
           EOF
 
       # ------------------------------------------------------------------
