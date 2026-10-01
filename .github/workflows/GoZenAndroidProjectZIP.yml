@@ -172,8 +172,8 @@ jobs:
             --prefix="$PREFIX" \
             --disable-programs \
             --disable-doc \
-            --disable-static \
-            --enable-shared \
+            --enable-static \
+            --disable-shared \
             --enable-pic \
             --enable-libvpx \
             --enable-libaom \
