@@ -10,7 +10,7 @@ jobs:
   build-project-zip:
     name: Build GoZen Android Project ZIP
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 150
 
     steps:
       # ------------------------------------------------------------------
@@ -53,7 +53,7 @@ jobs:
       - name: Install SCons
         run: pip install scons
 
-      - name: Setup Godot 4.3 (with templates)
+      - name: Setup Godot 4.3 (only used for helper tools if needed)
         uses: chickensoft-games/setup-godot@v2
         with:
           version: "4.3.0"
@@ -70,10 +70,48 @@ jobs:
           path: |
             codec_prefix
             core/gde_gozen/ffmpeg
-          key: codecs-arm64-ndk28-${{ hashFiles('core/gde_gozen/**/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v2
+          key: codecs-arm64-ndk28-godotcpp48-${{ hashFiles('core/gde_gozen/**/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v3
 
       # ------------------------------------------------------------------
-      # 4. Build external codecs (only on cache miss)
+      # 4. Prepare native deps + godot-cpp 4.8
+      # ------------------------------------------------------------------
+      - name: Clone required libraries + godot-cpp 4.8
+        run: |
+          set -euo pipefail
+          GDE_DIR="./core/gde_gozen"
+          cd "$GDE_DIR"
+
+          # libvpx
+          if [ ! -d "libvpx" ]; then
+            echo "Cloning libvpx..."
+            git clone --depth 1 https://chromium.googlesource.com/webm/libvpx
+          fi
+
+          # libaom
+          if [ ! -d "libaom" ]; then
+            echo "Cloning libaom..."
+            git clone --depth 1 https://aomedia.googlesource.com/aom libaom
+          fi
+
+          # FFmpeg
+          if [ ! -d "ffmpeg" ]; then
+            echo "Cloning FFmpeg n7.1..."
+            git clone --depth 1 -b n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+          fi
+
+          # Force latest godot-cpp (compatible with 4.8-dev7)
+          echo "Injecting godot-cpp master for 4.8-dev7..."
+          rm -rf godot-cpp
+          git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git
+          cd godot-cpp
+          git submodule update --init --recursive
+          cd ..
+
+          echo "Native deps + godot-cpp ready"
+          ls -la
+
+      # ------------------------------------------------------------------
+      # 5. Build external codecs (OpenSSL, VPX, AOM)
       # ------------------------------------------------------------------
       - name: Build External Codecs (OpenSSL, VPX, AOM)
         if: steps.cache-codecs.outputs.cache-hit != 'true'
@@ -123,7 +161,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
-      # 5. Cross-compile FFmpeg
+      # 6. Cross-compile FFmpeg
       # ------------------------------------------------------------------
       - name: Cross-Compile FFmpeg (arm64)
         if: steps.cache-codecs.outputs.cache-hit != 'true'
@@ -166,7 +204,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
-      # 6. Compile GDExtension
+      # 7. Compile GDExtension
       # ------------------------------------------------------------------
       - name: Compile GDExtension (arm64)
         run: |
@@ -193,12 +231,12 @@ jobs:
                   f.write(line)
           EOF
 
-          # Build release + debug
+          # Build release + debug against godot-cpp master (4.8)
           scons platform=android target=template_release arch=arm64 -j$(nproc)
           scons platform=android target=template_debug   arch=arm64 -j$(nproc)
 
       # ------------------------------------------------------------------
-      # 7. Locate binaries & patch .gdextension
+      # 8. Locate binaries & patch .gdextension
       # ------------------------------------------------------------------
       - name: Patch GDExtension & copy binaries
         run: |
@@ -244,7 +282,7 @@ jobs:
           EOF
 
       # ------------------------------------------------------------------
-      # 8. Create the final project ZIP
+      # 9. Create the final project ZIP
       # ------------------------------------------------------------------
       - name: Create project ZIP
         run: |
@@ -256,6 +294,7 @@ jobs:
             -x "*core/gde_gozen/libvpx*" \
             -x "*core/gde_gozen/libaom*" \
             -x "*core/gde_gozen/ffmpeg*" \
+            -x "*core/gde_gozen/godot-cpp*" \
             -x "*codec_prefix*" \
             -x "*openssl*" \
             -x "*build*" \
@@ -270,7 +309,7 @@ jobs:
           ls -lh dist/
 
       # ------------------------------------------------------------------
-      # 9. Upload artifact
+      # 10. Upload artifact
       # ------------------------------------------------------------------
       - name: Upload Project ZIP
         uses: actions/upload-artifact@v4
