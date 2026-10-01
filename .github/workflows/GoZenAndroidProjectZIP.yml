@@ -64,7 +64,8 @@ jobs:
             codec_prefix
             core/ffmpeg
             core/gde_gozen/ffmpeg
-          key: codecs-arm64-ndk28-godotcpp47-${{ hashFiles('core/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v5
+          # FIX: Removed .cpp files from hash so logic changes don't trigger 20-min codec rebuilds
+          key: codecs-arm64-ndk28-godotcpp47-${{ hashFiles('core/SConstruct', '.github/workflows/*.yml') }}-v6
 
       # ------------------------------------------------------------------
       # 4. Prepare native deps + godot-cpp 4.8
@@ -77,30 +78,21 @@ jobs:
           GDE_DIR="gde_gozen"
 
           if [ ! -d "$GDE_DIR/libvpx" ]; then
-            echo "Cloning libvpx..."
             git clone --depth 1 https://chromium.googlesource.com/webm/libvpx "$GDE_DIR/libvpx"
           fi
 
           if [ ! -d "$GDE_DIR/libaom" ]; then
-            echo "Cloning libaom..."
             git clone --depth 1 https://aomedia.googlesource.com/aom "$GDE_DIR/libaom"
           fi
 
           if [ ! -d "$GDE_DIR/ffmpeg" ]; then
-            echo "Cloning FFmpeg n7.1..."
             git clone --depth 1 -b n7.1 https://github.com/FFmpeg/FFmpeg.git "$GDE_DIR/ffmpeg"
           fi
 
-          # godot_cpp must sit next to SConstruct
-          echo "Injecting godot-cpp master as godot_cpp (for 4.8-dev7)..."
           rm -rf godot_cpp godot-cpp
           git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git godot_cpp
           cd godot_cpp
           git submodule update --init --recursive
-          cd ..
-
-          echo "=== core/ after setup ==="
-          ls -la
 
       # ------------------------------------------------------------------
       # 5. Build external codecs (OpenSSL, VPX, AOM)
@@ -112,7 +104,8 @@ jobs:
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
           mkdir -p "$PREFIX"
 
-          export ANDROID_NDK_ROOT="/usr/local/lib/android/sdk/ndk/28.1.13356709"
+          # FIX: Use dynamic ANDROID_HOME instead of hardcoded Ubuntu runner paths
+          export ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/28.1.13356709"
           export PATH="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           export CC=aarch64-linux-android24-clang
           export CXX=aarch64-linux-android24-clang++
@@ -149,7 +142,6 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF
           make -j$(nproc)
           make install
-          cd "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
       # 6. Cross-compile FFmpeg
@@ -160,7 +152,9 @@ jobs:
           set -euo pipefail
           cd ./core/gde_gozen/ffmpeg
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
-          NDK_PATH="/usr/local/lib/android/sdk/ndk/28.1.13356709"
+          
+          # FIX: Use dynamic ANDROID_HOME
+          NDK_PATH="$ANDROID_HOME/ndk/28.1.13356709"
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           API=24
 
@@ -192,67 +186,35 @@ jobs:
 
           make -j$(nproc)
           make install
-          cd "$GITHUB_WORKSPACE"
 
       # ------------------------------------------------------------------
-      # 7. Compile GDExtension (with forced include paths)
+      # 7. Compile GDExtension
       # ------------------------------------------------------------------
       - name: Compile GDExtension (arm64)
         run: |
           set -euo pipefail
           cd ./core
 
-          echo "=== Contents of ./core ==="
-          ls -la
-
-          if [ ! -f "SConstruct" ]; then
-            echo "ERROR: SConstruct not found in $(pwd)"
-            exit 1
-          fi
-
           # Verify FFmpeg headers exist
           if [ ! -f "$GITHUB_WORKSPACE/codec_prefix/include/libavcodec/avcodec.h" ]; then
             echo "ERROR: FFmpeg headers not found in codec_prefix"
-            ls -la "$GITHUB_WORKSPACE/codec_prefix/include" || true
             exit 1
           fi
 
-          # ------------------------------------------------------------------
-          # Option 1: Force full include paths so complete class definitions
-          # are visible (fixes incomplete GetTypeInfo / Ref<> errors)
-          # ------------------------------------------------------------------
-          python3 << 'EOF'
+          # FIX: Instead of rewriting SConstruct, generate a custom.py configuration file
+          # SCons automatically reads custom.py in the working directory to append to the build environment.
+          cat << EOF > custom.py
           import os
-          workspace = os.environ["GITHUB_WORKSPACE"]
-          prefix_lib = workspace + "/codec_prefix/lib"
-          prefix_inc = workspace + "/codec_prefix/include"
+          workspace = os.environ.get("GITHUB_WORKSPACE", "")
+          prefix_lib = os.path.join(workspace, "codec_prefix", "lib")
+          prefix_inc = os.path.join(workspace, "codec_prefix", "include")
 
-          with open("SConstruct", "r") as f:
-              lines = f.readlines()
-
-          with open("SConstruct", "w") as f:
-              for line in lines:
-                  # Remove "tls" references
-                  for bad in ['"tls"', "'tls'"]:
-                      line = line.replace(bad + ",", "")
-                      line = line.replace(", " + bad, "")
-                      line = line.replace(bad, '""')
-
-                  # Inject paths + forced includes just before SharedLibrary
-                  if "env.SharedLibrary" in line:
-                      indent = line[:len(line) - len(line.lstrip())]
-                      # Include paths (headers)
-                      f.write(f'{indent}env.Append(CPPPATH=["gde_gozen", "{prefix_inc}"])\n')
-                      # Force the compiler to look in gde_gozen first
-                      f.write(f'{indent}env.Append(CXXFLAGS=["-Igde_gozen", "-I{prefix_inc}"])\n')
-                      # Library search path
-                      f.write(f'{indent}env.Append(LIBPATH=["{prefix_lib}"])\n')
-                      # Required libraries
-                      f.write(f'{indent}env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"])\n')
-                  f.write(line)
+          CPPPATH = ["gde_gozen", prefix_inc]
+          CXXFLAGS = ["-Igde_gozen", f"-I{prefix_inc}"]
+          LIBPATH = [prefix_lib]
+          LIBS = ["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"]
           EOF
 
-          # Build (api_version=4.7 is the highest currently accepted)
           scons platform=android target=template_release arch=arm64 api_version=4.7 -j$(nproc)
           scons platform=android target=template_debug   arch=arm64 api_version=4.7 -j$(nproc)
 
@@ -266,21 +228,14 @@ jobs:
           EXT_FILE=$(find . -name "*.gdextension" | head -n1)
           if [ -z "$EXT_FILE" ]; then
             echo "ERROR: Could not find any .gdextension file"
-            find . -name "*.gdextension" || true
             exit 1
           fi
           EXT_DIR=$(dirname "$EXT_FILE")
-          echo "Found extension: $EXT_FILE"
-
+          
           mkdir -p "$EXT_DIR/bin"
-
-          # Copy compiled .so files
           find ./core -name "libgozen.android.template_release.arm64.so" -exec cp {} "$EXT_DIR/bin/" \;
           find ./core -name "libgozen.android.template_debug.arm64.so"   -exec cp {} "$EXT_DIR/bin/" \;
           find . -name "*gozen*arm64*.so" -exec cp {} "$EXT_DIR/bin/" \; 2>/dev/null || true
-
-          echo "=== Binaries in $EXT_DIR/bin ==="
-          ls -la "$EXT_DIR/bin/" || true
 
           # Inject android library entries
           python3 << EOF
@@ -303,7 +258,6 @@ jobs:
 
           with open(path, "w") as f:
               f.write(content)
-          print("Patched", path)
           EOF
 
       # ------------------------------------------------------------------
@@ -331,9 +285,6 @@ jobs:
             -x "*__pycache__*" \
             -x "*.pyc" \
             -x "*compile_commands.json*"
-
-          echo "Created dist/GoZen-Android-Project.zip"
-          ls -lh dist/
 
       # ------------------------------------------------------------------
       # 10. Upload artifact
