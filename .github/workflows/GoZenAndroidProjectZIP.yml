@@ -190,19 +190,61 @@ jobs:
       # ------------------------------------------------------------------
       # 6.5. Patch Upstream C++ Code
       # ------------------------------------------------------------------
-      - name: Patch missing Math_PI
+      - name: Patch Upstream C++ Code
         run: |
           set -euo pipefail
+          cd core/gde_gozen
           
-          # Inject Math_PI definition at the very top of the failing file
-          FILE="core/gde_gozen/smb_pitch_shift.hpp"
-          if [ -f "$FILE" ]; then
-            sed -i '1i #ifndef Math_PI\n#define Math_PI 3.14159265358979323846\n#endif\n' "$FILE"
-            echo "Successfully patched $FILE with Math_PI definition."
-          else
-            echo "ERROR: $FILE not found to patch!"
-            exit 1
-          fi
+          python3 << 'EOF'
+          import os
+
+          # --- 1. Patch smb_pitch_shift.hpp (Math_PI) ---
+          f_math = "smb_pitch_shift.hpp"
+          if os.path.exists(f_math):
+              with open(f_math, "r") as f:
+                  content = f.read()
+              if "Math_PI" not in content[:500]:
+                  content = "#ifndef Math_PI\n#define Math_PI 3.14159265358979323846\n#endif\n" + content
+                  with open(f_math, "w") as f:
+                      f.write(content)
+              print("Patched Math_PI")
+
+          # --- 2. Patch audio_stream_ffmpeg.hpp ---
+          f_hpp = "audio_stream_ffmpeg.hpp"
+          if os.path.exists(f_hpp):
+              with open(f_hpp, "r") as f:
+                  content = f.read()
+              
+              # Add missing Godot headers so GDCLASS works
+              if "<godot_cpp/classes/audio_stream.hpp>" not in content:
+                  content = content.replace("#include <godot_cpp/classes/audio_stream_playback.hpp>", 
+                                            "#include <godot_cpp/classes/audio_stream.hpp>\n#include <godot_cpp/classes/mutex.hpp>\n#include <godot_cpp/classes/audio_stream_playback.hpp>")
+              
+              # Fix Mutex namespace
+              content = content.replace("Mutex* mutex", "godot::Mutex* mutex")
+              
+              # Fix private member access (inject friend class)
+              if "friend class AudioStreamFFmpeg;" not in content:
+                  content = content.replace("class AudioStreamFFmpegPlayback : public godot::AudioStreamPlayback {", 
+                                            "class AudioStreamFFmpegPlayback : public godot::AudioStreamPlayback {\n    friend class AudioStreamFFmpeg;\n")
+                                            
+              with open(f_hpp, "w") as f:
+                  f.write(content)
+              print("Patched audio_stream_ffmpeg.hpp")
+
+          # --- 3. Patch audio_stream_ffmpeg.cpp ---
+          f_cpp = "audio_stream_ffmpeg.cpp"
+          if os.path.exists(f_cpp):
+              with open(f_cpp, "r") as f:
+                  content = f.read()
+              
+              # Fix memnew Mutex namespace
+              content = content.replace("memnew(Mutex)", "memnew(godot::Mutex)")
+              
+              with open(f_cpp, "w") as f:
+                  f.write(content)
+              print("Patched audio_stream_ffmpeg.cpp")
+          EOF
 
       # ------------------------------------------------------------------
       # 7. Compile GDExtension (arm64)
