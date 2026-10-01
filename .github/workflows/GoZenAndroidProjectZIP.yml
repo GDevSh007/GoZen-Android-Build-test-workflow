@@ -98,12 +98,13 @@ jobs:
             echo "Cloning FFmpeg n7.1..."
             git clone --depth 1 -b n7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
           fi
-
+          
           # Force latest godot-cpp (compatible with 4.8-dev7)
-          echo "Injecting godot-cpp master for 4.8-dev7..."
-          rm -rf godot-cpp
-          git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git
-          cd godot-cpp
+          # IMPORTANT: folder must be named "godot_cpp" (underscore)
+          echo "Injecting godot-cpp master as godot_cpp..."
+          rm -rf godot-cpp godot_cpp
+          git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git godot_cpp
+          cd godot_cpp
           git submodule update --init --recursive
           cd ..
 
@@ -209,9 +210,37 @@ jobs:
       - name: Compile GDExtension (arm64)
         run: |
           set -euo pipefail
-          cd ./core/gde_gozen
 
-          # Patch SConstruct: remove "tls", inject paths
+          GDE_DIR="./core/gde_gozen"
+          if [ ! -d "$GDE_DIR" ]; then
+            echo "ERROR: $GDE_DIR does not exist"
+            find . -maxdepth 3 -type d -name "*gozen*" || true
+            exit 1
+          fi
+
+          cd "$GDE_DIR"
+          echo "=== Contents of $GDE_DIR ==="
+          ls -la
+
+          if [ ! -f "SConstruct" ]; then
+            echo "ERROR: SConstruct not found in $(pwd)"
+            find . -name "SConstruct" || true
+            exit 1
+          fi
+
+          # Ensure godot_cpp exists with the name the SConstruct expects
+          if [ -d "godot-cpp" ] && [ ! -d "godot_cpp" ]; then
+            mv godot-cpp godot_cpp
+          fi
+          if [ ! -d "godot_cpp" ]; then
+            echo "Cloning godot-cpp as godot_cpp (required by SConstruct)..."
+            git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git godot_cpp
+            cd godot_cpp
+            git submodule update --init --recursive
+            cd ..
+          fi
+
+          # Patch SConstruct: remove "tls", inject extra library paths
           python3 << 'EOF'
           import os
           prefix = os.environ["GITHUB_WORKSPACE"] + "/codec_prefix/lib"
@@ -231,7 +260,7 @@ jobs:
                   f.write(line)
           EOF
 
-          # Build release + debug against godot-cpp master (4.8)
+          # Build
           scons platform=android target=template_release arch=arm64 -j$(nproc)
           scons platform=android target=template_debug   arch=arm64 -j$(nproc)
 
