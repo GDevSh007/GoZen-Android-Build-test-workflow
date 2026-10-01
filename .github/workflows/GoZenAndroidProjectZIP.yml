@@ -188,7 +188,7 @@ jobs:
           make install
 
       # ------------------------------------------------------------------
-      # 7. Compile GDExtension
+      # 7. Compile GDExtension (arm64)
       # ------------------------------------------------------------------
       - name: Compile GDExtension (arm64)
         run: |
@@ -201,18 +201,30 @@ jobs:
             exit 1
           fi
 
-          # FIX: Instead of rewriting SConstruct, generate a custom.py configuration file
-          # SCons automatically reads custom.py in the working directory to append to the build environment.
-          cat << EOF > custom.py
+          # Force inject include and library paths into SConstruct so SCons explicitly finds FFmpeg
+          python3 << 'EOF'
           import os
           workspace = os.environ.get("GITHUB_WORKSPACE", "")
           prefix_lib = os.path.join(workspace, "codec_prefix", "lib")
           prefix_inc = os.path.join(workspace, "codec_prefix", "include")
 
-          CPPPATH = ["gde_gozen", prefix_inc]
-          CXXFLAGS = ["-Igde_gozen", f"-I{prefix_inc}"]
-          LIBPATH = [prefix_lib]
-          LIBS = ["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"]
+          with open("SConstruct", "r") as f:
+              lines = f.readlines()
+
+          with open("SConstruct", "w") as f:
+              for line in lines:
+                  # Remove any hardcoded "tls" references that might break the build
+                  for bad in ['"tls"', "'tls'"]:
+                      line = line.replace(bad + ",", "").replace(", " + bad, "").replace(bad, '""')
+
+                  # Inject paths + forced includes just before SharedLibrary is generated
+                  if "env.SharedLibrary" in line:
+                      indent = line[:len(line) - len(line.lstrip())]
+                      f.write(f'{indent}env.Append(CPPPATH=["gde_gozen", "{prefix_inc}"])\n')
+                      f.write(f'{indent}env.Append(CXXFLAGS=["-Igde_gozen", "-I{prefix_inc}"])\n')
+                      f.write(f'{indent}env.Append(LIBPATH=["{prefix_lib}"])\n')
+                      f.write(f'{indent}env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"])\n')
+                  f.write(line)
           EOF
 
           scons platform=android target=template_release arch=arm64 api_version=4.7 -j$(nproc)
