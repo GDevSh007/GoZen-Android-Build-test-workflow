@@ -53,13 +53,6 @@ jobs:
       - name: Install SCons
         run: pip install scons
 
-      - name: Setup Godot 4.3 (only used for helper tools if needed)
-        uses: chickensoft-games/setup-godot@v2
-        with:
-          version: "4.3.0"
-          use-dotnet: false
-          include-templates: true
-
       # ------------------------------------------------------------------
       # 3. Cache heavy native builds
       # ------------------------------------------------------------------
@@ -69,8 +62,9 @@ jobs:
         with:
           path: |
             codec_prefix
+            core/ffmpeg
             core/gde_gozen/ffmpeg
-          key: codecs-arm64-ndk28-godotcpp48-${{ hashFiles('core/gde_gozen/**/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v3
+          key: codecs-arm64-ndk28-godotcpp48-${{ hashFiles('core/SConstruct', 'core/gde_gozen/**/*.cpp') }}-v4
 
       # ------------------------------------------------------------------
       # 4. Prepare native deps + godot-cpp 4.8
@@ -80,29 +74,36 @@ jobs:
           set -euo pipefail
           cd ./core
 
-          # libvpx / libaom / ffmpeg live under gde_gozen in this monorepo
+          # Libraries live under gde_gozen in this monorepo
           GDE_DIR="gde_gozen"
 
           if [ ! -d "$GDE_DIR/libvpx" ]; then
+            echo "Cloning libvpx..."
             git clone --depth 1 https://chromium.googlesource.com/webm/libvpx "$GDE_DIR/libvpx"
           fi
+
           if [ ! -d "$GDE_DIR/libaom" ]; then
+            echo "Cloning libaom..."
             git clone --depth 1 https://aomedia.googlesource.com/aom "$GDE_DIR/libaom"
           fi
+
           if [ ! -d "$GDE_DIR/ffmpeg" ]; then
+            echo "Cloning FFmpeg n7.1..."
             git clone --depth 1 -b n7.1 https://github.com/FFmpeg/FFmpeg.git "$GDE_DIR/ffmpeg"
           fi
 
-          # godot_cpp must be next to SConstruct (i.e. in ./core)
+          # godot_cpp must sit next to SConstruct (i.e. in ./core)
+          # Folder name MUST be godot_cpp (underscore)
+          echo "Injecting godot-cpp master as godot_cpp (for 4.8-dev7)..."
           rm -rf godot_cpp godot-cpp
           git clone --depth 1 -b master https://github.com/godotengine/godot-cpp.git godot_cpp
           cd godot_cpp
           git submodule update --init --recursive
           cd ..
 
-          echo "Ready – listing core/"
+          echo "=== core/ after setup ==="
           ls -la
-      
+
       # ------------------------------------------------------------------
       # 5. Build external codecs (OpenSSL, VPX, AOM)
       # ------------------------------------------------------------------
@@ -110,7 +111,6 @@ jobs:
         if: steps.cache-codecs.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          GDE_DIR="./core/gde_gozen"
           PREFIX="$GITHUB_WORKSPACE/codec_prefix"
           mkdir -p "$PREFIX"
 
@@ -125,10 +125,10 @@ jobs:
           ./Configure android-arm64 -D__ANDROID_API__=24 --prefix="$PREFIX" no-shared
           make -j$(nproc)
           make install_sw
-          cd ..
+          cd "$GITHUB_WORKSPACE"
 
           # ---------- libvpx ----------
-          cd "$GDE_DIR/libvpx"
+          cd ./core/gde_gozen/libvpx
           ./configure \
             --target=arm64-android-gcc \
             --prefix="$PREFIX" \
@@ -139,7 +139,7 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
           # ---------- libaom ----------
-          cd "$GDE_DIR/libaom"
+          cd ./core/gde_gozen/libaom
           mkdir -p build_android && cd build_android
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
@@ -215,7 +215,6 @@ jobs:
             exit 1
           fi
 
-          # Make sure godot_cpp exists (we already injected it earlier)
           if [ ! -d "godot_cpp" ]; then
             echo "ERROR: godot_cpp directory missing"
             exit 1
@@ -235,16 +234,16 @@ jobs:
                       line = line.replace(bad, '""')
                   if "env.SharedLibrary" in line:
                       indent = line[:len(line) - len(line.lstrip())]
-                      f.write(f'{indent}env.Append(CPPPATH=["gde_gozen", "gde_gozen/ffmpeg"])\n')
-                      f.write(f'{indent}env.Append(LIBPATH=["gde_gozen/ffmpeg/libavformat", "gde_gozen/ffmpeg/libavcodec", "gde_gozen/ffmpeg/libavutil", "gde_gozen/ffmpeg/libswscale", "gde_gozen/ffmpeg/libswresample", "{prefix}"])\n')
+                      f.write(f'{indent}env.Append(CPPPATH=["gde_gozen"])\n')
+                      f.write(f'{indent}env.Append(LIBPATH=["{prefix}"])\n')
                       f.write(f'{indent}env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"])\n')
                   f.write(line)
           EOF
 
-          # Build from ./core
-          scons platform=android target=template_release arch=arm64 -j$(nproc)
-          scons platform=android target=template_debug   arch=arm64 -j$(nproc)
-      
+          # api_version is required by modern godot-cpp (4.8+)
+          scons platform=android target=template_release arch=arm64 api_version=4.8 -j$(nproc)
+          scons platform=android target=template_debug   arch=arm64 api_version=4.8 -j$(nproc)
+
       # ------------------------------------------------------------------
       # 8. Locate binaries & patch .gdextension
       # ------------------------------------------------------------------
@@ -252,9 +251,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          EXT_FILE=$(find . -name "*.gdextension" | grep -v "core/gde_gozen" | head -n1)
+          # Find the main .gdextension file (usually under addons/)
+          EXT_FILE=$(find . -name "*.gdextension" | head -n1)
           if [ -z "$EXT_FILE" ]; then
-            echo "ERROR: Could not find main .gdextension file"
+            echo "ERROR: Could not find any .gdextension file"
+            find . -name "*.gdextension" || true
             exit 1
           fi
           EXT_DIR=$(dirname "$EXT_FILE")
@@ -262,18 +263,24 @@ jobs:
 
           mkdir -p "$EXT_DIR/bin"
 
-          find ./core/gde_gozen -name "libgozen.android.template_release.arm64.so" -exec cp {} "$EXT_DIR/bin/" \;
-          find ./core/gde_gozen -name "libgozen.android.template_debug.arm64.so"   -exec cp {} "$EXT_DIR/bin/" \;
+          # Copy the compiled .so files (they are produced under core/)
+          find ./core -name "libgozen.android.template_release.arm64.so" -exec cp {} "$EXT_DIR/bin/" \;
+          find ./core -name "libgozen.android.template_debug.arm64.so"   -exec cp {} "$EXT_DIR/bin/" \;
 
-          ls -la "$EXT_DIR/bin/"
+          # Also try common alternative names / locations
+          find . -name "*gozen*arm64*.so" -exec cp {} "$EXT_DIR/bin/" \; 2>/dev/null || true
 
-          # Robustly inject library entries
+          echo "=== Binaries in $EXT_DIR/bin ==="
+          ls -la "$EXT_DIR/bin/" || true
+
+          # Inject android library entries into the .gdextension file
           python3 << EOF
           import re
           path = "$EXT_FILE"
           with open(path) as f:
               content = f.read()
 
+          # Remove any existing android arm64 lines
           content = re.sub(r'android\.(debug|release)\.arm64\s*=.*\n?', '', content)
 
           libs = '''[libraries]
@@ -304,7 +311,8 @@ jobs:
             -x "*core/gde_gozen/libvpx*" \
             -x "*core/gde_gozen/libaom*" \
             -x "*core/gde_gozen/ffmpeg*" \
-            -x "*core/gde_gozen/godot-cpp*" \
+            -x "*core/ffmpeg*" \
+            -x "*core/godot_cpp*" \
             -x "*codec_prefix*" \
             -x "*openssl*" \
             -x "*build*" \
@@ -313,7 +321,8 @@ jobs:
             -x "*.a" \
             -x "*.obj" \
             -x "*__pycache__*" \
-            -x "*.pyc"
+            -x "*.pyc" \
+            -x "*compile_commands.json*"
 
           echo "Created dist/GoZen-Android-Project.zip"
           ls -lh dist/
