@@ -278,27 +278,54 @@ jobs:
       - name: Patch GDExtension & copy binaries
         run: |
           set -euo pipefail
+          
+          # 1. Find the .gdextension file and its folder
           EXT_FILE=$(find . -name "*.gdextension" | head -n1)
           EXT_DIR=$(dirname "$EXT_FILE")
           
+          # 2. Find the exact names of the compiled Android libraries
+          DEBUG_SO=$(find ./core -name "*template_debug.arm64.so" | head -n1)
+          RELEASE_SO=$(find ./core -name "*template_release.arm64.so" | head -n1)
+          
+          DEBUG_NAME=$(basename "$DEBUG_SO")
+          RELEASE_NAME=$(basename "$RELEASE_SO")
+          
+          # 3. Copy binaries next to the .gdextension file in a /bin/ folder
           mkdir -p "$EXT_DIR/bin"
-          find ./core -name "*template_release.arm64.so" -exec cp {} "$EXT_DIR/bin/" \;
-          find ./core -name "*template_debug.arm64.so"   -exec cp {} "$EXT_DIR/bin/" \;
-
+          cp "$DEBUG_SO" "$EXT_DIR/bin/"
+          cp "$RELEASE_SO" "$EXT_DIR/bin/"
+          
+          # 4. Calculate the correct Godot res:// path dynamically
+          CLEAN_DIR=$(echo "$EXT_DIR" | sed 's|^\./||; s|^\.$||')
+          if [ -z "$CLEAN_DIR" ]; then
+            RES_PREFIX="res://bin"
+          else
+            RES_PREFIX="res://$CLEAN_DIR/bin"
+          fi
+          
+          echo "Patching $EXT_FILE to point to $RES_PREFIX"
+          
+          # 5. Inject the exact dynamic paths into the configuration file
           python3 << EOF
           import re
           path = "$EXT_FILE"
           with open(path) as f: content = f.read()
+          
+          # Strip old android entries if they exist
           content = re.sub(r'android\.(debug|release)\.arm64\s*=.*\n?', '', content)
-          libs = '''[libraries]
-          android.debug.arm64 = "res://addons/gde_gozen/bin/libgozen.android.template_debug.arm64.so"
-          android.release.arm64 = "res://addons/gde_gozen/bin/libgozen.android.template_release.arm64.so"
-          '''
+          
+          libs = f"""[libraries]
+          android.debug.arm64 = "{RES_PREFIX}/{DEBUG_NAME}"
+          android.release.arm64 = "{RES_PREFIX}/{RELEASE_NAME}"
+          """
+          
           if "[libraries]" in content:
               content = content.replace("[libraries]", libs.strip(), 1)
           else:
               content += "\n" + libs
+              
           with open(path, "w") as f: f.write(content)
+          print("Successfully patched libraries section.")
           EOF
 
       # ------------------------------------------------------------------
