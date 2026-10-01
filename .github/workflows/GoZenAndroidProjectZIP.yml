@@ -64,7 +64,8 @@ jobs:
             codec_prefix
             core/ffmpeg
             core/gde_gozen/ffmpeg
-          key: codecs-arm64-ndk23-godotcpp43-${{ hashFiles('core/SConstruct', '.github/workflows/*.yml') }}-v11
+          key: codecs-arm64-ndk23-godotcpp43-${{ hashFiles('core/SConstruct', '.github/workflows/*.yml') }}-v12
+
 
       # ------------------------------------------------------------------
       # 4. Prepare native deps + godot-cpp 4.3 Stable
@@ -175,12 +176,12 @@ jobs:
             --enable-static \
             --disable-shared \
             --enable-pic \
+            --disable-asm \
             --enable-libvpx \
             --enable-libaom \
             --enable-openssl \
             --enable-protocol=https \
             --enable-protocol=tls
-
 
           make -j$(nproc)
           make install
