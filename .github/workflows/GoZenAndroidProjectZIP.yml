@@ -202,8 +202,6 @@ jobs:
       - name: Compile GDExtension (arm64)
         run: |
           set -euo pipefail
-
-          # In the GoZen monorepo the SConstruct lives in ./core
           cd ./core
 
           echo "=== Contents of ./core ==="
@@ -211,39 +209,45 @@ jobs:
 
           if [ ! -f "SConstruct" ]; then
             echo "ERROR: SConstruct not found in $(pwd)"
-            find . -name "SConstruct" || true
             exit 1
           fi
 
-          if [ ! -d "godot_cpp" ]; then
-            echo "ERROR: godot_cpp directory missing"
+          # Verify FFmpeg headers exist
+          if [ ! -f "$GITHUB_WORKSPACE/codec_prefix/include/libavcodec/avcodec.h" ]; then
+            echo "ERROR: FFmpeg headers not found in codec_prefix"
+            ls -la "$GITHUB_WORKSPACE/codec_prefix/include" || true
             exit 1
           fi
 
-          # Patch SConstruct: remove "tls", inject library paths
+          # Patch SConstruct
           python3 << 'EOF'
           import os
-          prefix = os.environ["GITHUB_WORKSPACE"] + "/codec_prefix/lib"
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          prefix_lib = workspace + "/codec_prefix/lib"
+          prefix_inc = workspace + "/codec_prefix/include"
+
           with open("SConstruct", "r") as f:
               lines = f.readlines()
+
           with open("SConstruct", "w") as f:
               for line in lines:
                   for bad in ['"tls"', "'tls'"]:
                       line = line.replace(bad + ",", "")
                       line = line.replace(", " + bad, "")
                       line = line.replace(bad, '""')
+
                   if "env.SharedLibrary" in line:
                       indent = line[:len(line) - len(line.lstrip())]
-                      f.write(f'{indent}env.Append(CPPPATH=["gde_gozen"])\n')
-                      f.write(f'{indent}env.Append(LIBPATH=["{prefix}"])\n')
+                      f.write(f'{indent}env.Append(CPPPATH=["gde_gozen", "{prefix_inc}"])\n')
+                      f.write(f'{indent}env.Append(LIBPATH=["{prefix_lib}"])\n')
                       f.write(f'{indent}env.Append(LIBS=["avformat", "avcodec", "avutil", "swscale", "swresample", "vpx", "aom", "ssl", "crypto", "z"])\n')
                   f.write(line)
           EOF
 
-          # api_version is required by modern godot-cpp (4.7+)
+          # Build
           scons platform=android target=template_release arch=arm64 api_version=4.7 -j$(nproc)
           scons platform=android target=template_debug   arch=arm64 api_version=4.7 -j$(nproc)
-          
+      
       # ------------------------------------------------------------------
       # 8. Locate binaries & patch .gdextension
       # ------------------------------------------------------------------
